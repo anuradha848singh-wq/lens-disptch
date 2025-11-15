@@ -1,0 +1,177 @@
+I want you to build a complete modern news website platform with smooth UI like Ground News, NDTV, Inshorts, Reuters, and Al Jazeera.  
+This will be a professional news platform for my own media house, including multiple publishers and editors.
+
+I want the output in the following structure:
+1. Full folder architecture  
+2. Clean, well-commented code  
+3. Responsive UI  
+4. API routes  
+5. Database schema  
+6. Admin dashboard  
+7. Editor dashboard  
+8. Publisher management  
+9. Frontend with powerful filtering  
+10. Authentication  
+11. Deployment steps for Replit  
+
+──────────────────────────────────────
+### 🔥 CORE REQUIREMENTS
+──────────────────────────────────────
+
+**Tech Stack**
+- Frontend: Next.js (App Router) + TailwindCSS + ShadCN UI + Framer Motion
+- Backend: Node.js + Express or Next.js API Routes (choose best option)
+- Database: PostgreSQL (use Prisma ORM)
+- Auth: JWT-based login for editors and admin
+- Image Uploads: Upload to local / Cloudinary
+- Deployed on Replit
+
+──────────────────────────────────────
+### 🚀 MAIN PLATFORM FEATURES
+──────────────────────────────────────
+
+#### 1. Homepage UI
+- Smooth UI inspired by Ground News + Scroll animations
+- Modern cards for news
+- Infinite scrolling
+- Category filter (Politics, Business, World, Sports, Tech)
+- Bias filter (Left, Right, Center)
+- Search bar
+- Trending News section
+- Breaking news ticker
+- Dark/Light mode
+
+#### 2. Article Page
+- Large hero image
+- Publisher name + logo
+- Writer name (editor)
+- Tags
+- Bias label (Left / Center / Right)
+- Related stories section
+- Clean typography like major media houses
+
+#### 3. Editor Dashboard
+Editors must be able to:
+- Login
+- Create articles (title, content, images)
+- Select bias: Left / Right / Center
+- Select category
+- Add tags
+- Save as draft
+- Publish
+- View all articles
+- Edit / Delete their articles
+
+#### 4. Admin Dashboard
+Admin must be able to:
+- Add/edit/delete publishers
+- Add/edit/delete editors
+- Approve articles
+- View analytics (page views, top stories)
+- Manage categories and tags
+- Control homepage layout
+
+#### 5. Publisher System
+Each article will belong to a **publisher/media house**.
+Publisher fields:
+- name
+- description
+- logo
+- website link
+- bias tendency (optional)
+
+Admin can add unlimited publishers.
+
+──────────────────────────────────────
+### 📚 DATABASE SCHEMA (Use Prisma)
+──────────────────────────────────────
+
+Create Prisma models:
+- User (role: admin / editor)
+- Publisher
+- Article
+- Category
+- Tags
+- ArticleView
+- MediaLibrary (images)
+
+Include relations:
+- Article belongs to Publisher
+- Article written by User
+- Article has many tags
+- Article belongs to Category
+
+──────────────────────────────────────
+### 🔥 API ENDPOINTS
+──────────────────────────────────────
+
+Create REST API routes:
+- POST /api/auth/login
+- POST /api/articles/create
+- GET /api/articles
+- GET /api/articles/:id
+- PATCH /api/articles/:id
+- DELETE /api/articles/:id
+- POST /api/publishers/create
+- GET /api/publishers
+- GET /api/categories
+- POST /api/upload/image
+
+──────────────────────────────────────
+### 🎨 FRONTEND REQUIREMENTS
+──────────────────────────────────────
+
+Use:
+- TailwindCSS for layout
+- ShadCN UI for cards/buttons/inputs
+- Framer Motion for animations
+
+Pages:
+- / → Homepage
+- /article/[id] → Article Page
+- /category/[name] → Category-wise feed
+- /publisher/[id] → News by publisher
+- /dashboard → Editor dashboard
+- /admin → Admin dashboard
+
+──────────────────────────────────────
+### ⚡ EXTRA FEATURES (Important)
+──────────────────────────────────────
+
+- SEO optimized (metadata, OG tags)
+- Fast page load (Image optimization)
+- SSR + SSG for speed
+- Mobile-friendly UI
+- Bookmark articles (local storage)
+- "Bias Breakdown" on article page (pie chart)
+- Newsletter system (optional)
+
+──────────────────────────────────────
+### 🛠 Deployment Instructions (Replit)
+──────────────────────────────────────
+
+Provide:
+- exact commands to run Prisma
+- environment variable template (.env)
+- how to start server
+- how to build Next.js
+- how to setup PostgreSQL on Replit
+- final deployment steps
+
+──────────────────────────────────────
+### 📌 Deliverables
+──────────────────────────────────────
+
+Give me:
+1. Full codebase
+2. All necessary files
+3. Step-by-step setup
+4. A clean modern UI identical to premium news apps
+5. Working authentication
+6. Fully functional backend
+7. Fully functional frontend
+8. Complete admin + editor portal
+9. High-quality animations
+10. Publisher management system
+
+Make the platform fully ready to run instantly in Replit.
