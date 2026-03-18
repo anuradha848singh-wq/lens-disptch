@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Search, Moon, Sun, Menu, X, LayoutDashboard, LogOut, User, ShieldCheck } from "lucide-react";
+import { Search, Moon, Sun, X, LayoutDashboard, LogOut, ShieldCheck, ChevronDown, Bell, Globe } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "@/lib/auth-context";
 import { AuthModal } from "./AuthModal";
@@ -20,45 +20,69 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
   const [location] = useLocation();
   const [showSearch, setShowSearch] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+
+  const openAuth = (mode: "login" | "register") => { setAuthMode(mode); setAuthOpen(true); };
 
   const tabs = [
     { label: "Home", href: "/" },
     { label: "For You", href: "/for-you" },
+    { label: "Local", href: "/local" },
     { label: "Blindspot", href: "/blindspot" },
-    { label: "Publishers", href: "/publishers" },
-    { label: "Bookmarks", href: "/bookmarks" },
   ];
 
   return (
     <>
-      <nav className="sticky top-0 z-40 bg-background border-b" data-testid="main-nav">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex items-center gap-4 h-12">
-            <button
-              className="lg:hidden hover-elevate active-elevate-2 p-1 rounded-md"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              data-testid="button-mobile-menu"
-            >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
+      {/* Top promo bar */}
+      <div className="bg-zinc-900 text-white text-xs py-2 px-4 flex items-center justify-between" data-testid="top-promo">
+        <div className="hidden md:flex items-center gap-4 text-zinc-400">
+          <span>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
+          <span>·</span>
+          <span className="flex items-center gap-1"><Globe className="w-3 h-3" /> International Edition</span>
+        </div>
+        <div className="flex-1 md:flex-none text-center font-medium">
+          See every side of every news story.{" "}
+          <button
+            onClick={() => openAuth("register")}
+            className="text-red-400 underline hover:text-red-300 font-semibold"
+            data-testid="top-bar-cta"
+          >
+            Get Started
+          </button>
+        </div>
+        <div className="hidden md:flex items-center gap-3 text-zinc-400">
+          <span>Browser Extension</span>
+          <span>·</span>
+          <span>Light</span>
+          <span>·</span>
+          <span>Auto</span>
+        </div>
+      </div>
 
+      {/* Main nav */}
+      <nav className="sticky top-0 z-40 bg-background border-b shadow-sm" data-testid="main-nav">
+        <div className="max-w-[1400px] mx-auto px-4">
+          <div className="flex items-center gap-3 h-12">
+            {/* Logo */}
             <Link href="/">
-              <span className="font-black text-xl tracking-tight cursor-pointer select-none" data-testid="text-logo">
-                <span className="text-primary">G</span>ROUND
-                <span className="block text-[8px] tracking-[0.3em] text-muted-foreground leading-none -mt-0.5">NEWS</span>
+              <span className="flex items-end gap-1 cursor-pointer select-none flex-shrink-0" data-testid="text-logo">
+                <span className="font-black text-2xl tracking-[-0.05em] leading-none uppercase">
+                  Gro<span className="text-primary">u</span>nd
+                </span>
+                <span className="text-[10px] font-bold text-muted-foreground leading-none mb-0.5 tracking-wider uppercase">News</span>
               </span>
             </Link>
 
-            <div className="hidden lg:flex items-center gap-1 ml-2">
+            {/* Nav tabs */}
+            <div className="hidden md:flex items-center border-l border-border ml-1 pl-3">
               {tabs.map((tab) => (
                 <Link key={tab.href} href={tab.href}>
                   <span
-                    className={`px-3 py-1.5 text-sm rounded-md cursor-pointer transition-colors hover-elevate active-elevate-2 ${
+                    className={`px-3 py-1 text-sm rounded transition-colors cursor-pointer ${
                       location === tab.href
-                        ? "font-semibold text-foreground bg-secondary"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
+                        ? "font-semibold text-foreground"
+                        : "text-muted-foreground hover:text-foreground hover-elevate"
+                    } ${location === tab.href ? "border-b-2 border-primary rounded-none" : ""}`}
                     data-testid={`nav-${tab.label.toLowerCase().replace(/\s+/g, "-")}`}
                   >
                     {tab.label}
@@ -67,40 +91,40 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
               ))}
             </div>
 
-            <div className="flex-1" />
-
-            <div className="flex items-center gap-2">
+            {/* Search */}
+            <div className="flex-1 max-w-xs ml-2">
               {showSearch ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 border border-border rounded bg-muted px-2 h-8">
+                  <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                   <Input
                     autoFocus
                     type="search"
                     placeholder="Search stories..."
                     value={searchQuery}
                     onChange={(e) => onSearch(e.target.value)}
-                    className="w-48 h-8 text-sm"
+                    className="border-0 bg-transparent h-7 text-sm p-0 focus-visible:ring-0"
                     data-testid="input-search"
                   />
-                  <button
-                    onClick={() => { setShowSearch(false); onSearch(""); }}
-                    className="hover-elevate active-elevate-2 p-1 rounded-md"
-                  >
-                    <X className="w-4 h-4 text-muted-foreground" />
+                  <button onClick={() => { setShowSearch(false); onSearch(""); }}>
+                    <X className="w-3.5 h-3.5 text-muted-foreground" />
                   </button>
                 </div>
               ) : (
                 <button
                   onClick={() => setShowSearch(true)}
-                  className="hover-elevate active-elevate-2 p-1.5 rounded-md text-muted-foreground hover:text-foreground"
+                  className="flex items-center gap-2 border border-border rounded bg-muted px-3 h-8 text-sm text-muted-foreground w-full text-left hover-elevate"
                   data-testid="button-search"
                 >
-                  <Search className="w-4 h-4" />
+                  <Search className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline text-xs">Search</span>
                 </button>
               )}
+            </div>
 
+            <div className="flex items-center gap-1 ml-auto">
               <button
                 onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-                className="hover-elevate active-elevate-2 p-1.5 rounded-md text-muted-foreground hover:text-foreground"
+                className="p-2 rounded hover-elevate active-elevate-2 text-muted-foreground hover:text-foreground"
                 data-testid="button-theme"
               >
                 {theme === "light" ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
@@ -109,26 +133,28 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
               {user ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="hover-elevate active-elevate-2 rounded-full" data-testid="button-user-menu">
+                    <button className="flex items-center gap-2 pl-2 hover-elevate active-elevate-2 rounded" data-testid="button-user-menu">
                       <Avatar className="h-7 w-7">
-                        <AvatarFallback className="text-xs bg-primary text-primary-foreground font-semibold">
+                        <AvatarFallback className="text-[11px] bg-primary text-primary-foreground font-bold">
                           {profile?.displayName?.[0] ?? user.email[0].toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
+                      <span className="text-sm font-medium hidden sm:inline">{profile?.displayName?.split(" ")[0]}</span>
+                      <ChevronDown className="w-3 h-3 text-muted-foreground hidden sm:block" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <div className="px-3 py-2 text-sm">
-                      <p className="font-medium">{profile?.displayName}</p>
-                      <p className="text-muted-foreground text-xs">{user.email}</p>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <div className="px-3 py-2">
+                      <p className="font-semibold text-sm">{profile?.displayName}</p>
+                      <p className="text-xs text-muted-foreground">{user.email}</p>
                     </div>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => window.location.href = "/dashboard"}>
-                      <LayoutDashboard className="w-4 h-4 mr-2" />Editor Dashboard
+                    <DropdownMenuItem asChild>
+                      <Link href="/dashboard"><span className="flex items-center gap-2 w-full cursor-pointer"><LayoutDashboard className="w-4 h-4" />Editor Dashboard</span></Link>
                     </DropdownMenuItem>
                     {user.role === "admin" && (
-                      <DropdownMenuItem onClick={() => window.location.href = "/admin"}>
-                        <ShieldCheck className="w-4 h-4 mr-2" />Admin Dashboard
+                      <DropdownMenuItem asChild>
+                        <Link href="/admin"><span className="flex items-center gap-2 w-full cursor-pointer"><ShieldCheck className="w-4 h-4" />Admin Dashboard</span></Link>
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
@@ -142,16 +168,16 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 text-sm"
-                    onClick={() => setAuthOpen(true)}
+                    className="h-8 text-sm font-medium"
+                    onClick={() => openAuth("login")}
                     data-testid="button-login"
                   >
                     Login
                   </Button>
                   <Button
                     size="sm"
-                    className="h-8 text-sm"
-                    onClick={() => setAuthOpen(true)}
+                    className="h-8 text-sm font-semibold bg-primary hover:bg-primary text-primary-foreground"
+                    onClick={() => openAuth("register")}
                     data-testid="button-subscribe"
                   >
                     Subscribe
@@ -160,27 +186,10 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
               )}
             </div>
           </div>
-
-          {mobileMenuOpen && (
-            <div className="lg:hidden border-t py-2 flex flex-col gap-1">
-              {tabs.map((tab) => (
-                <Link key={tab.href} href={tab.href}>
-                  <span
-                    className={`block px-3 py-2 text-sm rounded-md cursor-pointer ${
-                      location === tab.href ? "font-semibold bg-secondary" : "text-muted-foreground"
-                    }`}
-                    onClick={() => setMobileMenuOpen(false)}
-                  >
-                    {tab.label}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          )}
         </div>
       </nav>
 
-      <AuthModal open={authOpen} onOpenChange={setAuthOpen} />
+      <AuthModal open={authOpen} onOpenChange={setAuthOpen} defaultMode={authMode} />
     </>
   );
 }

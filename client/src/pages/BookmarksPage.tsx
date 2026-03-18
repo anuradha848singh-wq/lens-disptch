@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { TopBanner } from "@/components/TopBanner";
 import { MainNav } from "@/components/MainNav";
 import { NewsFooter } from "@/components/NewsFooter";
 import { StoryCard } from "@/components/StoryCard";

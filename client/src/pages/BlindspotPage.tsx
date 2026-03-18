@@ -1,44 +1,65 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { TopBanner } from "@/components/TopBanner";
 import { MainNav } from "@/components/MainNav";
 import { NewsFooter } from "@/components/NewsFooter";
 import { StoryCard } from "@/components/StoryCard";
 import { BiasChip } from "@/components/BiasBar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type ArticleWithDetails } from "@shared/schema";
-import { Eye } from "lucide-react";
+import { Eye, AlertCircle } from "lucide-react";
+
+function SkeletonCard() {
+  return (
+    <div className="bg-card border border-card-border rounded overflow-hidden">
+      <Skeleton className="aspect-video w-full" />
+      <div className="p-3 space-y-2">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-4/5" />
+        <Skeleton className="h-1.5 w-full rounded-full" />
+      </div>
+    </div>
+  );
+}
 
 export default function BlindspotPage() {
   const { data: leftData, isLoading: loadingLeft } = useQuery({
     queryKey: ["/api/articles", { bias: "left", limit: 6 }],
     queryFn: () => api.articles.list({ bias: "left", limit: 6 }),
   });
-
   const { data: rightData, isLoading: loadingRight } = useQuery({
     queryKey: ["/api/articles", { bias: "right", limit: 6 }],
     queryFn: () => api.articles.list({ bias: "right", limit: 6 }),
   });
 
-  const leftArticles = leftData?.articles ?? [];
-  const rightArticles = rightData?.articles ?? [];
+  const leftArticles: ArticleWithDetails[] = leftData?.articles ?? [];
+  const rightArticles: ArticleWithDetails[] = rightData?.articles ?? [];
 
   return (
     <div className="min-h-screen bg-background">
-      <TopBanner />
       <MainNav onSearch={() => {}} searchQuery="" />
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <div className="max-w-[1400px] mx-auto px-4 py-8">
         {/* Header */}
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 bg-foreground text-background px-3 py-1.5 rounded-full text-sm font-semibold mb-4">
-            <Eye className="w-4 h-4" />
-            Blindspot Feed
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-8 h-8 rounded-full bg-zinc-900 dark:bg-zinc-100 flex items-center justify-center">
+              <Eye className="w-4 h-4 text-white dark:text-zinc-900" />
+            </div>
+            <h1 className="text-2xl font-bold">Blindspot</h1>
           </div>
-          <h1 className="text-3xl font-bold mb-3">Stories You Might Be Missing</h1>
-          <p className="text-muted-foreground max-w-xl mx-auto">
-            The Blindspot identifies stories disproportionately covered by one side of the political spectrum.
-            Left-leaning sources may not report on stories covered by right-leaning sources, and vice versa.
+          <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
+            The Blindspot identifies stories that are disproportionately covered by one side of the political spectrum.
+            These are stories that left-leaning sources may be missing from right-leaning coverage, and vice versa —
+            helping you see what you might be missing based on your media diet.
+          </p>
+        </div>
+
+        {/* Info banner */}
+        <div className="border border-amber-200 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 rounded p-3 mb-6 flex gap-3 items-start">
+          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+            <span className="font-bold">Note:</span> Stories in this demo are seeded with sample data. In a fully deployed version,
+            real blindspot detection uses clustering algorithms to find stories covered predominantly by one political side.
           </p>
         </div>
 
@@ -48,30 +69,27 @@ export default function BlindspotPage() {
             <div className="flex items-center gap-3 mb-4 pb-3 border-b">
               <BiasChip bias="left" />
               <div>
-                <h2 className="font-bold text-sm">Left Blindspot</h2>
-                <p className="text-xs text-muted-foreground">Stories covered primarily by left-leaning sources</p>
+                <h2 className="text-sm font-bold">Left Blindspot</h2>
+                <p className="text-xs text-muted-foreground">Stories mostly covered by left-leaning sources</p>
               </div>
+              <span className="ml-auto text-xs font-bold text-muted-foreground">
+                {leftArticles.length} stories
+              </span>
             </div>
             {loadingLeft ? (
-              <div className="space-y-3">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="flex gap-3">
-                    <Skeleton className="w-20 h-16 flex-shrink-0 rounded" />
-                    <div className="flex-1 space-y-2">
-                      <Skeleton className="h-4 w-full" />
-                      <Skeleton className="h-3 w-24" />
-                    </div>
-                  </div>
-                ))}
+              <div className="grid grid-cols-1 gap-4">
+                {[...Array(3)].map((_, i) => <SkeletonCard key={i} />)}
+              </div>
+            ) : leftArticles.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <Eye className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">No left-leaning stories found</p>
               </div>
             ) : (
-              <div className="bg-card border border-card-border rounded-md p-4">
-                {leftArticles.map((article: ArticleWithDetails) => (
-                  <StoryCard key={article.id} article={article} variant="list" />
+              <div className="grid grid-cols-1 gap-4">
+                {leftArticles.map((a) => (
+                  <StoryCard key={a.id} article={a} variant="standard" />
                 ))}
-                {leftArticles.length === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-6">No left-bias stories found</p>
-                )}
               </div>
             )}
           </div>
@@ -81,57 +99,32 @@ export default function BlindspotPage() {
             <div className="flex items-center gap-3 mb-4 pb-3 border-b">
               <BiasChip bias="right" />
               <div>
-                <h2 className="font-bold text-sm">Right Blindspot</h2>
-                <p className="text-xs text-muted-foreground">Stories covered primarily by right-leaning sources</p>
+                <h2 className="text-sm font-bold">Right Blindspot</h2>
+                <p className="text-xs text-muted-foreground">Stories mostly covered by right-leaning sources</p>
               </div>
+              <span className="ml-auto text-xs font-bold text-muted-foreground">
+                {rightArticles.length} stories
+              </span>
             </div>
             {loadingRight ? (
-              <div className="space-y-3">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="flex gap-3">
-                    <Skeleton className="w-20 h-16 flex-shrink-0 rounded" />
-                    <div className="flex-1 space-y-2">
-                      <Skeleton className="h-4 w-full" />
-                      <Skeleton className="h-3 w-24" />
-                    </div>
-                  </div>
-                ))}
+              <div className="grid grid-cols-1 gap-4">
+                {[...Array(3)].map((_, i) => <SkeletonCard key={i} />)}
+              </div>
+            ) : rightArticles.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <Eye className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">No right-leaning stories found</p>
               </div>
             ) : (
-              <div className="bg-card border border-card-border rounded-md p-4">
-                {rightArticles.map((article: ArticleWithDetails) => (
-                  <StoryCard key={article.id} article={article} variant="list" />
+              <div className="grid grid-cols-1 gap-4">
+                {rightArticles.map((a) => (
+                  <StoryCard key={a.id} article={a} variant="standard" />
                 ))}
-                {rightArticles.length === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-6">No right-bias stories found</p>
-                )}
               </div>
             )}
           </div>
         </div>
-
-        {/* CTA */}
-        <div className="mt-12 text-center bg-card border border-card-border rounded-md p-8">
-          <h3 className="text-lg font-bold mb-2">Get the Blindspot Report Newsletter</h3>
-          <p className="text-muted-foreground text-sm mb-4">
-            Receive a weekly digest of stories being ignored by sources you trust.
-          </p>
-          <div className="flex gap-2 max-w-sm mx-auto">
-            <input
-              type="email"
-              placeholder="your@email.com"
-              className="flex-1 px-3 py-2 text-sm border border-border rounded-md bg-background"
-              data-testid="input-blindspot-email"
-            />
-            <button
-              className="px-4 py-2 text-sm font-medium bg-foreground text-background rounded-md hover-elevate active-elevate-2"
-              data-testid="button-blindspot-subscribe"
-            >
-              Subscribe
-            </button>
-          </div>
-        </div>
-      </main>
+      </div>
 
       <NewsFooter />
     </div>
