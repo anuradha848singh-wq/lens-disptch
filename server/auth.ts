@@ -1,13 +1,10 @@
 import bcrypt from "bcrypt";
-import { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
-import type { UserRole } from "@shared/schema";
-
-const SALT_ROUNDS = 10;
-const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000;
+import type { Request, Response, NextFunction } from "express";
+import { randomBytes } from "crypto";
 
 export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, SALT_ROUNDS);
+  return bcrypt.hash(password, 12);
 }
 
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
@@ -15,31 +12,27 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export async function generateSessionToken(): Promise<string> {
-  const randomBytes = crypto.getRandomValues(new Uint8Array(32));
-  return Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return randomBytes(32).toString("hex");
 }
 
 export async function authenticateUser(req: Request, res: Response, next: NextFunction) {
   try {
     const sessionId = req.cookies?.session_id;
-    
     if (!sessionId) {
       return res.status(401).json({ error: "Not authenticated" });
     }
 
     const session = await storage.getSession(sessionId);
-    
     if (!session) {
-      return res.status(401).json({ error: "Invalid session" });
+      return res.status(401).json({ error: "Session not found" });
     }
 
-    if (session.expiresAt < new Date()) {
+    if (new Date() > session.expiresAt) {
       await storage.deleteSession(sessionId);
       return res.status(401).json({ error: "Session expired" });
     }
 
     const user = await storage.getUser(session.userId);
-    
     if (!user || user.status !== "active") {
       return res.status(401).json({ error: "User not found or inactive" });
     }
@@ -48,45 +41,39 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
     (req as any).sessionId = sessionId;
     next();
   } catch (error) {
-    console.error("Authentication error:", error);
-    res.status(500).json({ error: "Authentication failed" });
+    console.error("Auth error:", error);
+    res.status(500).json({ error: "Authentication error" });
   }
 }
 
-export function requireRole(...roles: UserRole[]) {
+export function requireRole(role: "admin" | "editor") {
   return (req: Request, res: Response, next: NextFunction) => {
     const user = (req as any).user;
-    
     if (!user) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-
-    if (!roles.includes(user.role)) {
-      return res.status(403).json({ error: "Insufficient permissions" });
+    if (role === "admin" && user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
     }
-
     next();
   };
 }
 
-export function optionalAuth(req: Request, res: Response, next: NextFunction) {
-  const sessionId = req.cookies?.session_id;
-  
-  if (!sessionId) {
-    return next();
-  }
+export async function optionalAuth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const sessionId = req.cookies?.session_id;
+    if (!sessionId) return next();
 
-  storage.getSession(sessionId).then(session => {
-    if (session && session.expiresAt >= new Date()) {
-      storage.getUser(session.userId).then(user => {
-        if (user && user.status === "active") {
-          (req as any).user = user;
-          (req as any).sessionId = sessionId;
-        }
-        next();
-      }).catch(() => next());
-    } else {
-      next();
+    const session = await storage.getSession(sessionId);
+    if (!session || new Date() > session.expiresAt) return next();
+
+    const user = await storage.getUser(session.userId);
+    if (user && user.status === "active") {
+      (req as any).user = user;
+      (req as any).sessionId = sessionId;
     }
-  }).catch(() => next());
+    next();
+  } catch {
+    next();
+  }
 }

@@ -1,189 +1,163 @@
 import { useState } from "react";
-import { BreakingNewsTicker } from "@/components/BreakingNewsTicker";
-import { Header } from "@/components/Header";
-import { CategoryPills } from "@/components/CategoryPills";
-import { ArticleCard } from "@/components/ArticleCard";
-import { BiasFilter } from "@/components/BiasFilter";
-import { Card, CardContent } from "@/components/ui/card";
-import { useLocation } from "wouter";
-import businessHero from "@assets/generated_images/Business_news_hero_image_33ed114d.png";
-import techHero from "@assets/generated_images/Technology_news_hero_image_93f09ba8.png";
-import politicsHero from "@assets/generated_images/Politics_news_hero_image_67b47093.png";
-import worldHero from "@assets/generated_images/World_news_hero_image_36fd524a.png";
-import sportsHero from "@assets/generated_images/Sports_news_hero_image_19684b5f.png";
-import globalTimesLogo from "@assets/generated_images/Global_Times_publisher_logo_ca784f81.png";
-import techDailyLogo from "@assets/generated_images/Tech_Daily_publisher_logo_1c01fd2a.png";
-import worldReportLogo from "@assets/generated_images/World_Report_publisher_logo_e02698d3.png";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { TopBanner } from "@/components/TopBanner";
+import { MainNav } from "@/components/MainNav";
+import { CategoryStrip } from "@/components/CategoryStrip";
+import { BreakingTicker } from "@/components/BreakingTicker";
+import { StoryCard } from "@/components/StoryCard";
+import { CoveredMostBy, TrendingTopics, SuggestSourceWidget, BlindspotSignup } from "@/components/SidebarWidgets";
+import { NewsFooter } from "@/components/NewsFooter";
+import { Skeleton } from "@/components/ui/skeleton";
+import { type ArticleWithDetails } from "@shared/schema";
 
-type Bias = "left" | "center" | "right";
+function ArticleSkeleton() {
+  return (
+    <div className="border border-card-border rounded-md bg-card overflow-hidden">
+      <Skeleton className="aspect-video w-full" />
+      <div className="p-3 space-y-2">
+        <Skeleton className="h-3 w-16" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="h-1.5 w-full rounded-full" />
+      </div>
+    </div>
+  );
+}
 
 export default function HomePage() {
-  const [, setLocation] = useLocation();
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [selectedBias, setSelectedBias] = useState<Bias[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [biasFilter, setBiasFilter] = useState<"left" | "center" | "right" | null>(null);
 
-  const breakingNews = [
-    { id: "1", text: "Major economic summit concludes with new trade agreements" },
-    { id: "2", text: "Tech giant announces breakthrough in quantum computing" },
-    { id: "3", text: "International climate accord signed by 50 nations" },
-  ];
-
-  const categories = ["Politics", "Business", "Technology", "Sports", "World", "Health"];
-
-  const mockArticles = [
-    {
-      id: "1",
-      title: "Global Markets Rally as Economic Indicators Show Strong Growth",
-      excerpt: "Stock markets worldwide experience significant gains following positive employment data and manufacturing reports across major economies.",
-      imageUrl: businessHero,
-      publisher: { name: "Global Times", logo: globalTimesLogo },
-      author: "Sarah Johnson",
-      category: "Business",
-      bias: "center" as Bias,
-      publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-    },
-    {
-      id: "2",
-      title: "AI Breakthrough Promises Revolutionary Changes in Healthcare Diagnostics",
-      excerpt: "New artificial intelligence system demonstrates unprecedented accuracy in early disease detection, potentially saving millions of lives.",
-      imageUrl: techHero,
-      publisher: { name: "Tech Daily", logo: techDailyLogo },
-      author: "Michael Chen",
-      category: "Technology",
-      bias: "left" as Bias,
-      publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000),
-    },
-    {
-      id: "3",
-      title: "Political Leaders Gather for Historic Climate Summit in Geneva",
-      excerpt: "World leaders convene to discuss ambitious carbon reduction targets and sustainable energy transition strategies.",
-      imageUrl: politicsHero,
-      publisher: { name: "World Report", logo: worldReportLogo },
-      author: "Emma Rodriguez",
-      category: "Politics",
-      bias: "center" as Bias,
-      publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000),
-    },
-    {
-      id: "4",
-      title: "Global Supply Chains Show Signs of Recovery After Years of Disruption",
-      excerpt: "Manufacturing sector reports improved logistics performance and reduced shipping delays worldwide.",
-      imageUrl: worldHero,
-      publisher: { name: "Global Times", logo: globalTimesLogo },
-      author: "David Park",
-      category: "Business",
-      bias: "right" as Bias,
-      publishedAt: new Date(Date.now() - 8 * 60 * 60 * 1000),
-    },
-    {
-      id: "5",
-      title: "Championship Finals Draw Record Viewership Across Multiple Platforms",
-      excerpt: "Historic sporting event breaks streaming records as millions tune in globally for thrilling finale.",
-      imageUrl: sportsHero,
-      publisher: { name: "World Report", logo: worldReportLogo },
-      author: "James Miller",
-      category: "Sports",
-      bias: "center" as Bias,
-      publishedAt: new Date(Date.now() - 10 * 60 * 60 * 1000),
-    },
-    {
-      id: "6",
-      title: "New Trade Partnership Strengthens Economic Ties Between Continents",
-      excerpt: "Historic agreement opens new markets and creates opportunities for businesses on both sides.",
-      imageUrl: businessHero,
-      publisher: { name: "Tech Daily", logo: techDailyLogo },
-      author: "Lisa Thompson",
-      category: "World",
-      bias: "left" as Bias,
-      publishedAt: new Date(Date.now() - 12 * 60 * 60 * 1000),
-    },
-  ];
-
-  const filteredArticles = mockArticles.filter((article) => {
-    const categoryMatch = !selectedCategory || article.category === selectedCategory;
-    const biasMatch = selectedBias.length === 0 || selectedBias.includes(article.bias);
-    const searchMatch = !searchQuery || 
-      article.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      article.excerpt.toLowerCase().includes(searchQuery.toLowerCase());
-    return categoryMatch && biasMatch && searchMatch;
+  const { data, isLoading } = useQuery({
+    queryKey: ["/api/articles", { category: categoryId, bias: biasFilter, search: searchQuery, limit: 24 }],
+    queryFn: () => api.articles.list({
+      limit: 24,
+      ...(categoryId && { category: categoryId }),
+      ...(biasFilter && { bias: biasFilter }),
+      ...(searchQuery && { search: searchQuery }),
+    }),
   });
 
-  const featuredArticle = filteredArticles[0];
-  const trendingArticles = filteredArticles.slice(1, 4);
-  const mainArticles = filteredArticles.slice(4);
+  const { data: bookmarks = [] } = useQuery({
+    queryKey: ["/api/bookmarks"],
+    queryFn: api.bookmarks.list,
+    retry: false,
+  });
+
+  const bookmarkedIds = new Set((bookmarks as ArticleWithDetails[]).map((a: ArticleWithDetails) => a.id));
+  const articles: ArticleWithDetails[] = data?.articles ?? [];
+  const featured = articles[0];
+  const topStories = articles.slice(1, 5);
+  const mainFeed = articles.slice(5);
 
   return (
     <div className="min-h-screen bg-background">
-      <BreakingNewsTicker items={breakingNews} />
-      <Header onSearch={setSearchQuery} />
+      <TopBanner />
+      <BreakingTicker />
+      <MainNav onSearch={setSearchQuery} searchQuery={searchQuery} />
+      <CategoryStrip
+        selectedCategoryId={categoryId}
+        onSelect={(id) => setCategoryId(id)}
+      />
 
-      <main className="container mx-auto px-4 lg:px-8 py-8">
-        <div className="mb-8">
-          <CategoryPills
-            categories={categories}
-            selectedCategory={selectedCategory}
-            onSelectCategory={setSelectedCategory}
-          />
-        </div>
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-8">
+          <div>
+            {/* Bias filter pills */}
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xs text-muted-foreground font-medium">Bias:</span>
+              {([null, "left", "center", "right"] as const).map((b) => (
+                <button
+                  key={String(b)}
+                  onClick={() => setBiasFilter(b)}
+                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
+                    biasFilter === b
+                      ? b === "left"
+                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                        : b === "center"
+                        ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                        : b === "right"
+                        ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+                        : "bg-secondary text-foreground"
+                      : "bg-muted text-muted-foreground hover:text-foreground hover-elevate"
+                  }`}
+                  data-testid={`bias-filter-${b ?? "all"}`}
+                >
+                  {b === null ? "All" : b.charAt(0).toUpperCase() + b.slice(1)}
+                </button>
+              ))}
+              {data && (
+                <span className="ml-auto text-xs text-muted-foreground">{data.total} stories</span>
+              )}
+            </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          <div className="lg:col-span-3 space-y-8">
-            <section>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2">
-                  {featuredArticle && (
-                    <ArticleCard
-                      article={featuredArticle}
-                      variant="featured"
-                      onClick={() => setLocation(`/article/${featuredArticle.id}`)}
-                    />
+            {/* Featured + Top 4 grid */}
+            {isLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                {[...Array(6)].map((_, i) => <ArticleSkeleton key={i} />)}
+              </div>
+            ) : articles.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground">
+                <p className="text-lg font-semibold">No stories found</p>
+                <p className="text-sm mt-1">Try adjusting your filters</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                  {featured && (
+                    <div className="md:col-span-2">
+                      <StoryCard article={featured} variant="featured" bookmarkedIds={bookmarkedIds} />
+                    </div>
                   )}
+                  <div className="space-y-4">
+                    {topStories.slice(0, 2).map((a) => (
+                      <StoryCard key={a.id} article={a} variant="standard" bookmarkedIds={bookmarkedIds} />
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-4">
-                  <h2 className="text-xl font-bold">Trending Now</h2>
-                  {trendingArticles.map((article) => (
-                    <ArticleCard
-                      key={article.id}
-                      article={article}
-                      variant="compact"
-                      onClick={() => setLocation(`/article/${article.id}`)}
-                    />
-                  ))}
-                </div>
-              </div>
-            </section>
 
-            <section>
-              <h2 className="text-2xl font-bold mb-6">Latest News</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {mainArticles.map((article) => (
-                  <ArticleCard
-                    key={article.id}
-                    article={article}
-                    variant="standard"
-                    onClick={() => setLocation(`/article/${article.id}`)}
-                  />
-                ))}
-              </div>
-            </section>
+                {/* Main article grid */}
+                {mainFeed.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-4">
+                      <h2 className="text-base font-bold">Latest Stories</h2>
+                      <div className="flex-1 h-px bg-border" />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {mainFeed.map((a) => (
+                        <StoryCard key={a.id} article={a} variant="standard" bookmarkedIds={bookmarkedIds} />
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-            {filteredArticles.length === 0 && (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">No articles found matching your filters.</p>
-              </div>
+                {/* List view of additional stories */}
+                {topStories.slice(2).length > 0 && (
+                  <div className="mt-8 bg-card border border-card-border rounded-md p-4">
+                    <h3 className="text-sm font-bold mb-2">More Stories</h3>
+                    {topStories.slice(2).map((a) => (
+                      <StoryCard key={a.id} article={a} variant="list" bookmarkedIds={bookmarkedIds} />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          <aside className="hidden lg:block">
-            <Card className="sticky top-24 border-card-border">
-              <CardContent className="p-6 space-y-6">
-                <BiasFilter selectedBias={selectedBias} onBiasChange={setSelectedBias} />
-              </CardContent>
-            </Card>
+          {/* Sidebar */}
+          <aside className="hidden lg:block space-y-4">
+            <CoveredMostBy />
+            <TrendingTopics />
+            <BlindspotSignup />
+            <SuggestSourceWidget />
           </aside>
         </div>
       </main>
+
+      <NewsFooter />
     </div>
   );
 }

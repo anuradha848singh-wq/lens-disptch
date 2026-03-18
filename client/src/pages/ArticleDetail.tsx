@@ -1,175 +1,278 @@
-import { Header } from "@/components/Header";
-import { BiasIndicator } from "@/components/BiasIndicator";
-import { CategoryBadge } from "@/components/CategoryBadge";
-import { PublisherBadge } from "@/components/PublisherBadge";
-import { ArticleCard } from "@/components/ArticleCard";
-import { Card } from "@/components/ui/card";
-import { formatDistanceToNow } from "date-fns";
-import { useLocation, useParams } from "wouter";
-import { ArrowLeft, Share2, Bookmark } from "lucide-react";
+import { useParams, useLocation } from "wouter";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { TopBanner } from "@/components/TopBanner";
+import { MainNav } from "@/components/MainNav";
+import { NewsFooter } from "@/components/NewsFooter";
+import { BiasBar, BiasChip, BiasLabel } from "@/components/BiasBar";
+import { StoryCard } from "@/components/StoryCard";
 import { Button } from "@/components/ui/button";
-import { useState } from "react";
-import businessHero from "@assets/generated_images/Business_news_hero_image_33ed114d.png";
-import techHero from "@assets/generated_images/Technology_news_hero_image_93f09ba8.png";
-import politicsHero from "@assets/generated_images/Politics_news_hero_image_67b47093.png";
-import globalTimesLogo from "@assets/generated_images/Global_Times_publisher_logo_ca784f81.png";
-import techDailyLogo from "@assets/generated_images/Tech_Daily_publisher_logo_1c01fd2a.png";
+import { Skeleton } from "@/components/ui/skeleton";
+import { formatDistanceToNow, format } from "date-fns";
+import { ArrowLeft, Bookmark, BookmarkCheck, Share2, Eye, ExternalLink } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/hooks/use-toast";
+import { type ArticleWithDetails } from "@shared/schema";
 
-type Bias = "left" | "center" | "right";
+function getBiasNumbers(bias: string) {
+  if (bias === "left") return { left: 65, center: 25, right: 10 };
+  if (bias === "right") return { left: 10, center: 25, right: 65 };
+  return { left: 20, center: 60, right: 20 };
+}
 
 export default function ArticleDetail() {
-  const [, setLocation] = useLocation();
   const { id } = useParams();
-  const [isBookmarked, setIsBookmarked] = useState(false);
+  const [, setLocation] = useLocation();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  const article = {
-    id: id || "1",
-    title: "Global Markets Rally as Economic Indicators Show Strong Growth",
-    imageUrl: businessHero,
-    publisher: { name: "Global Times", logo: globalTimesLogo },
-    author: "Sarah Johnson",
-    category: "Business",
-    bias: "center" as Bias,
-    publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-    tags: ["Economy", "Stock Market", "GDP", "Employment"],
-    content: `
-      <p class="text-lg mb-6">Stock markets worldwide experienced significant gains following positive employment data and manufacturing reports across major economies. The rally reflects growing investor confidence in the global economic recovery.</p>
-      
-      <h2 class="text-2xl font-bold mt-8 mb-4">Strong Economic Fundamentals</h2>
-      <p class="mb-4">Recent data from multiple sources indicates robust economic performance across key sectors. Manufacturing output has exceeded expectations, while employment figures show continued job creation in both developed and emerging markets.</p>
-      
-      <p class="mb-4">Analysts point to several factors contributing to this positive momentum, including stabilizing supply chains, increased consumer spending, and supportive monetary policies from central banks around the world.</p>
-      
-      <h2 class="text-2xl font-bold mt-8 mb-4">Market Response</h2>
-      <p class="mb-4">Major stock indices registered substantial gains, with technology and consumer discretionary sectors leading the advance. Trading volumes remained elevated throughout the session, suggesting broad-based participation in the rally.</p>
-      
-      <p class="mb-4">Currency markets also reflected the optimistic sentiment, with risk-on currencies strengthening against traditional safe havens. Commodity prices showed mixed performance, with industrial metals advancing while precious metals declined.</p>
-      
-      <h2 class="text-2xl font-bold mt-8 mb-4">Looking Ahead</h2>
-      <p class="mb-4">While the current data paints an encouraging picture, economists caution that challenges remain. Geopolitical tensions, potential policy changes, and lingering inflation concerns continue to pose risks to the economic outlook.</p>
-      
-      <p class="mb-4">Investors will be closely watching upcoming central bank meetings and additional economic data releases for further confirmation of the recovery's sustainability and strength.</p>
-    `,
+  const { data: article, isLoading } = useQuery({
+    queryKey: ["/api/articles", id],
+    queryFn: () => api.articles.get(id!),
+    enabled: !!id,
+  });
+
+  const { data: relatedData } = useQuery({
+    queryKey: ["/api/articles", { limit: 3 }],
+    queryFn: () => api.articles.list({ limit: 6 }),
+  });
+
+  const { data: bookmarks = [] } = useQuery({
+    queryKey: ["/api/bookmarks"],
+    queryFn: api.bookmarks.list,
+    retry: false,
+  });
+
+  const bookmarkedIds = new Set((bookmarks as ArticleWithDetails[]).map((a: ArticleWithDetails) => a.id));
+  const isBookmarked = id ? bookmarkedIds.has(id) : false;
+
+  const bookmarkMutation = useMutation({
+    mutationFn: () => isBookmarked
+      ? api.bookmarks.remove(id!)
+      : api.bookmarks.add(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bookmarks"] });
+      toast({ title: isBookmarked ? "Removed from bookmarks" : "Saved to bookmarks" });
+    },
+  });
+
+  const handleShare = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      toast({ title: "Link copied to clipboard" });
+    } catch {
+      toast({ title: "Share", description: window.location.href });
+    }
   };
 
-  const relatedArticles = [
-    {
-      id: "2",
-      title: "AI Breakthrough Promises Revolutionary Changes in Healthcare",
-      excerpt: "New artificial intelligence system demonstrates unprecedented accuracy in early disease detection.",
-      imageUrl: techHero,
-      publisher: { name: "Tech Daily", logo: techDailyLogo },
-      author: "Michael Chen",
-      category: "Technology",
-      bias: "left" as Bias,
-      publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000),
-    },
-    {
-      id: "3",
-      title: "Political Leaders Gather for Historic Climate Summit",
-      excerpt: "World leaders convene to discuss ambitious carbon reduction targets.",
-      imageUrl: politicsHero,
-      publisher: { name: "Global Times", logo: globalTimesLogo },
-      author: "Emma Rodriguez",
-      category: "Politics",
-      bias: "center" as Bias,
-      publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000),
-    },
-  ];
+  const related = (relatedData?.articles ?? []).filter((a) => a.id !== id).slice(0, 3);
 
   return (
     <div className="min-h-screen bg-background">
-      <Header onSearch={() => {}} />
+      <TopBanner />
+      <MainNav onSearch={() => {}} searchQuery="" />
 
-      <main className="container mx-auto px-4 lg:px-8 py-8 max-w-6xl">
-        <Button
-          variant="ghost"
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        <button
           onClick={() => setLocation("/")}
-          className="mb-6"
+          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-6 hover-elevate active-elevate-2 p-1 rounded-md -ml-1"
           data-testid="button-back"
         >
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to Home
-        </Button>
+          <ArrowLeft className="w-4 h-4" />
+          Back to feed
+        </button>
 
-        <article>
-          <div className="mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <CategoryBadge category={article.category} />
-              <BiasIndicator bias={article.bias} />
-            </div>
-            <h1 className="text-5xl font-bold mb-6" data-testid="text-article-title">{article.title}</h1>
+        {isLoading ? (
+          <div className="max-w-4xl mx-auto space-y-4">
+            <Skeleton className="h-8 w-3/4" />
+            <Skeleton className="h-4 w-48" />
+            <Skeleton className="h-72 w-full rounded-md" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
           </div>
+        ) : !article ? (
+          <div className="text-center py-16">
+            <p className="text-xl font-bold">Article not found</p>
+            <Button className="mt-4" onClick={() => setLocation("/")}>Go Home</Button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-8">
+            <article>
+              {/* Article header */}
+              <div className="mb-4">
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <BiasChip bias={article.bias} />
+                  {article.categories?.map((c) => (
+                    <span key={c.id} className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-md">
+                      {c.name}
+                    </span>
+                  ))}
+                </div>
+                <h1 className="text-3xl md:text-4xl font-bold leading-tight mb-4" data-testid="text-article-title">
+                  {article.title}
+                </h1>
+                <p className="text-lg text-muted-foreground leading-relaxed mb-4">{article.excerpt}</p>
 
-          <div className="flex items-center justify-between mb-8 pb-6 border-b">
-            <div className="flex items-center gap-4">
-              <PublisherBadge name={article.publisher.name} logo={article.publisher.logo} size="md" />
-              <div className="text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">By {article.author}</p>
-                <p>{formatDistanceToNow(article.publishedAt, { addSuffix: true })}</p>
+                {/* Meta bar */}
+                <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded bg-muted flex items-center justify-center text-sm font-bold text-muted-foreground">
+                        {article.publisher?.name?.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">{article.publisher?.name}</p>
+                        {article.publisher?.website && (
+                          <a
+                            href={article.publisher.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1"
+                          >
+                            {article.publisher.website.replace(/https?:\/\//, "")}
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      <p className="font-medium text-foreground">{article.author?.displayName}</p>
+                      {article.publishedAt && (
+                        <p className="text-xs">
+                          {format(new Date(article.publishedAt), "MMM d, yyyy")}
+                          {" · "}
+                          {formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {article.viewCount !== undefined && (
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>{article.viewCount} views</span>
+                      </div>
+                    )}
+                    {user && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => bookmarkMutation.mutate()}
+                        className="h-8"
+                        data-testid="button-bookmark"
+                      >
+                        {isBookmarked
+                          ? <><BookmarkCheck className="w-3.5 h-3.5 mr-1.5 text-primary" />Saved</>
+                          : <><Bookmark className="w-3.5 h-3.5 mr-1.5" />Save</>}
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleShare}
+                      className="h-8"
+                      data-testid="button-share"
+                    >
+                      <Share2 className="w-3.5 h-3.5 mr-1.5" />Share
+                    </Button>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  setIsBookmarked(!isBookmarked);
-                  console.log(`Article ${isBookmarked ? 'unbookmarked' : 'bookmarked'}`);
-                }}
-                data-testid="button-bookmark-article"
-              >
-                <Bookmark className={`w-4 h-4 ${isBookmarked ? "fill-current" : ""}`} />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => console.log("Share clicked")}
-                data-testid="button-share"
-              >
-                <Share2 className="w-4 h-4" />
-              </Button>
-            </div>
+
+              {/* Hero image */}
+              {article.heroImageUrl && article.heroImageUrl !== "/api/placeholder/1200/600" && (
+                <div className="mb-6 rounded-md overflow-hidden">
+                  <img
+                    src={article.heroImageUrl}
+                    alt={article.title}
+                    className="w-full max-h-[500px] object-cover"
+                  />
+                </div>
+              )}
+
+              {/* Article body */}
+              <div
+                className="prose prose-base dark:prose-invert max-w-none mb-8 prose-headings:font-bold prose-p:text-foreground/90 prose-p:leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: article.bodyHtml }}
+                data-testid="article-content"
+              />
+
+              {/* Tags */}
+              {article.tags?.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-6 pt-4 border-t">
+                  <span className="text-sm font-medium text-muted-foreground mr-2">Tags:</span>
+                  {article.tags.map((tag) => (
+                    <span
+                      key={tag.id}
+                      className="px-2.5 py-1 text-xs font-medium bg-secondary text-secondary-foreground rounded-md"
+                    >
+                      {tag.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            {/* Sidebar */}
+            <aside className="space-y-4">
+              {/* Bias breakdown */}
+              <div className="bg-card border border-card-border rounded-md p-4">
+                <h3 className="text-sm font-bold mb-3">Political Bias Breakdown</h3>
+                <BiasBar
+                  {...getBiasNumbers(article.bias)}
+                  showLabels
+                  showPercentages
+                  size="lg"
+                />
+                <p className="text-xs text-muted-foreground mt-3">
+                  Based on the publication's editorial position. Left = liberal, Center = centrist, Right = conservative.
+                </p>
+              </div>
+
+              {/* Publisher info */}
+              <div className="bg-card border border-card-border rounded-md p-4">
+                <h3 className="text-sm font-bold mb-3">Source</h3>
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 bg-muted rounded flex items-center justify-center font-bold text-muted-foreground flex-shrink-0">
+                    {article.publisher?.name?.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">{article.publisher?.name}</p>
+                    {article.publisher?.description && (
+                      <p className="text-xs text-muted-foreground mt-1">{article.publisher.description}</p>
+                    )}
+                    {article.publisher?.biasRating && (
+                      <div className="mt-1.5">
+                        <BiasChip bias={article.publisher.biasRating} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </aside>
           </div>
+        )}
 
-          <div className="mb-8">
-            <img
-              src={article.imageUrl}
-              alt={article.title}
-              className="w-full h-auto max-h-[600px] object-cover rounded-lg"
-            />
-          </div>
-
-          <div
-            className="prose prose-lg dark:prose-invert max-w-none mb-8"
-            dangerouslySetInnerHTML={{ __html: article.content }}
-            data-testid="text-article-content"
-          />
-
-          <div className="mb-8">
-            <h3 className="text-sm font-semibold mb-3">Tags</h3>
-            <div className="flex gap-2 flex-wrap">
-              {article.tags.map((tag) => (
-                <CategoryBadge key={tag} category={tag} />
+        {/* Related articles */}
+        {related.length > 0 && (
+          <div className="mt-12">
+            <div className="flex items-center gap-3 mb-6">
+              <h2 className="text-lg font-bold">More Stories</h2>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {related.map((a) => (
+                <StoryCard key={a.id} article={a} variant="standard" />
               ))}
             </div>
           </div>
-        </article>
-
-        <section className="mt-12">
-          <h2 className="text-2xl font-bold mb-6">Related Articles</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {relatedArticles.map((relatedArticle) => (
-              <ArticleCard
-                key={relatedArticle.id}
-                article={relatedArticle}
-                variant="standard"
-                onClick={() => setLocation(`/article/${relatedArticle.id}`)}
-              />
-            ))}
-          </div>
-        </section>
+        )}
       </main>
+
+      <NewsFooter />
     </div>
   );
 }
