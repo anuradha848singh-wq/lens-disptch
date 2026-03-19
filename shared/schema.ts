@@ -8,6 +8,8 @@ export const userStatusEnum = pgEnum("user_status", ["active", "inactive", "susp
 export const articleStatusEnum = pgEnum("article_status", ["draft", "review", "published", "archived"]);
 export const biasEnum = pgEnum("bias", ["left", "center", "right"]);
 export const mediaTypeEnum = pgEnum("media_type", ["image", "video", "embed"]);
+export const factualityEnum = pgEnum("factuality", ["very_high", "high", "mixed", "low", "very_low"]);
+export const ownerTypeEnum = pgEnum("owner_type", ["corporation", "individual", "nonprofit", "government", "unknown"]);
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -34,7 +36,16 @@ export const publishers = pgTable("publishers", {
   description: text("description"),
   logoUrl: text("logo_url"),
   website: text("website"),
+  rssUrl: text("rss_url"), // NEW: for automated fetching
   biasRating: biasEnum("bias_rating"),
+  factualityRating: factualityEnum("factuality_rating"),
+  ownerName: text("owner_name"),
+  ownerType: ownerTypeEnum("owner_type"),
+  country: text("country").notNull().default("US"), // NEW
+  language: text("language").notNull().default("en"), // NEW
+  active: boolean("active").notNull().default(true), // NEW: for disabling broken sources
+  failCount: integer("fail_count").notNull().default(0), // NEW: auto-disable after 10 fails
+  lastFetchedAt: timestamp("last_fetched_at"), // NEW
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -55,7 +66,7 @@ export const tags = pgTable("tags", {
 });
 
 export const articles = pgTable("articles", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: varchar("id").primaryKey(), // NEW: will use MD5(URL+Title) for deduplication
   publisherId: varchar("publisher_id").notNull().references(() => publishers.id, { onDelete: "restrict" }),
   authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "restrict" }),
   title: text("title").notNull(),
@@ -63,9 +74,16 @@ export const articles = pgTable("articles", {
   excerpt: text("excerpt").notNull(),
   bodyHtml: text("body_html").notNull(),
   heroImageUrl: text("hero_image_url"),
+  sourceUrl: text("source_url"),
+  fullContent: text("full_content"),
   status: articleStatusEnum("status").notNull().default("draft"),
   bias: biasEnum("bias").notNull(),
+  clusterId: text("cluster_id"), // NEW: for story grouping
+  importanceScore: integer("importance_score").notNull().default(0), // NEW: 0 to 100
+  biasHistory: jsonb("bias_history").$type<Array<{timestamp: string, left: number, center: number, right: number}>>().default([]),
+  aiInsights: jsonb("ai_insights").$type<string[]>().default([]),
   publishedAt: timestamp("published_at"),
+  fetchedAt: timestamp("fetched_at").notNull().defaultNow(), // NEW
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -74,6 +92,8 @@ export const articles = pgTable("articles", {
   authorIdx: index("articles_author_idx").on(table.authorId),
   statusIdx: index("articles_status_idx").on(table.status),
   publishedAtIdx: index("articles_published_at_idx").on(table.publishedAt),
+  clusterIdx: index("articles_cluster_idx").on(table.clusterId),
+  fetchedAtIdx: index("articles_fetched_at_idx").on(table.fetchedAt),
 }));
 
 export const articleCategories = pgTable("article_categories", {
@@ -134,6 +154,60 @@ export const sessions = pgTable("sessions", {
   expiresAtIdx: index("sessions_expires_at_idx").on(table.expiresAt),
 }));
 
+// --- Ground News Advanced Features ---
+
+export const readingHistory = pgTable("reading_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  articleId: varchar("article_id").notNull().references(() => articles.id, { onDelete: "cascade" }),
+  readAt: timestamp("read_at").notNull().defaultNow(),
+  readDurationSec: integer("read_duration_sec"),
+}, (table) => ({
+  userIdx: index("reading_history_user_idx").on(table.userId),
+  articleIdx: index("reading_history_article_idx").on(table.articleId),
+}));
+
+export const userPreferences = pgTable("user_preferences", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  followedTopics: jsonb("followed_topics").$type<string[]>().default([]),
+  followedCategories: jsonb("followed_categories").$type<string[]>().default([]),
+  preferredBias: jsonb("preferred_bias").$type<string[]>().default([]),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const shareEvents = pgTable("share_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  articleId: varchar("article_id").notNull().references(() => articles.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  platform: text("platform").notNull(), // "copy", "twitter", "facebook", "whatsapp"
+  sharedAt: timestamp("shared_at").notNull().defaultNow(),
+}, (table) => ({
+  articleIdx: index("share_events_article_idx").on(table.articleId),
+}));
+
+export const fetchQueue = pgTable("fetch_queue", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  publisherId: varchar("publisher_id").notNull().references(() => publishers.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["pending", "running", "done", "failed"] }).notNull().default("pending"),
+  error: text("error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  statusIdx: index("fetch_queue_status_idx").on(table.status),
+}));
+
+export const systemSettings = pgTable("system_settings", {
+  id: varchar("id").primaryKey().default("global"), // strictly one row usually
+  fetchCountry: text("fetch_country").notNull().default("US"),
+  fetchLanguage: text("fetch_language").notNull().default("en"),
+  localNewsKeywords: text("local_news_keywords"), // e.g. "Austin, Texas"
+  activeTopics: jsonb("active_topics").$type<string[]>().default([]),
+  useBrowserLocation: boolean("use_browser_location").notNull().default(false),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// --- Zod Schemas ---
+
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
   createdAt: true,
@@ -150,12 +224,15 @@ export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({
 });
 
 export const insertPublisherSchema = createInsertSchema(publishers).omit({
-  id: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
+  id: z.string().optional(), // allow custom IDs
   name: z.string().min(1).max(200),
   slug: z.string().min(1).max(200).regex(/^[a-z0-9-]+$/),
+  rssUrl: z.string().url().optional().nullable(),
+  country: z.string().min(2).max(10).default("US"),
+  language: z.string().min(2).max(10).default("en"),
 });
 
 export const insertCategorySchema = createInsertSchema(categories).omit({
@@ -175,15 +252,25 @@ export const insertTagSchema = createInsertSchema(tags).omit({
 });
 
 export const insertArticleSchema = createInsertSchema(articles).omit({
-  id: true,
   createdAt: true,
   updatedAt: true,
-  publishedAt: true,
+  fetchedAt: true,
 }).extend({
+  id: z.string().optional(), // allow custom IDs (MD5)
+  publishedAt: z.date().or(z.string()).optional().nullable(),
   title: z.string().min(1).max(500),
   slug: z.string().min(1).max(500).regex(/^[a-z0-9-]+$/),
   excerpt: z.string().min(1).max(1000),
   bodyHtml: z.string().min(1),
+  sourceUrl: z.string().url().optional().nullable(),
+  fullContent: z.string().optional().nullable(),
+  importanceScore: z.number().int().min(0).max(100).default(0),
+  biasHistory: z.array(z.object({
+    timestamp: z.string(),
+    left: z.number(),
+    center: z.number(),
+    right: z.number(),
+  })).default([]),
 });
 
 export const insertArticleCategorySchema = createInsertSchema(articleCategories);
@@ -203,6 +290,19 @@ export const insertSessionSchema = createInsertSchema(sessions).omit({
   id: true,
   createdAt: true,
 });
+export const insertFetchQueueSchema = createInsertSchema(fetchQueue).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertSystemSettingsSchema = createInsertSchema(systemSettings).omit({
+  updatedAt: true,
+}).extend({
+  activeTopics: z.array(z.string()).nullable().default([]),
+});
+
+// --- Types ---
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -229,14 +329,39 @@ export type InsertBookmark = z.infer<typeof insertBookmarkSchema>;
 export type Session = typeof sessions.$inferSelect;
 export type InsertSession = z.infer<typeof insertSessionSchema>;
 
+export type FetchQueue = typeof fetchQueue.$inferSelect;
+export type InsertFetchQueue = z.infer<typeof insertFetchQueueSchema>;
+
+export type ReadingHistoryEntry = typeof readingHistory.$inferSelect;
+export type UserPreference = typeof userPreferences.$inferSelect;
+export type ShareEvent = typeof shareEvents.$inferSelect;
+export type SystemSettings = typeof systemSettings.$inferSelect;
+export type InsertSystemSettings = z.infer<typeof insertSystemSettingsSchema>;
+
 export type ArticleWithDetails = Article & {
   publisher: Publisher;
   author: UserProfile;
   categories: Category[];
   tags: Tag[];
   viewCount?: number;
+  shareCount?: number;
+  sourceCount?: number;
+};
+
+export type MyBiasStats = {
+  totalRead: number;
+  leftCount: number;
+  centerCount: number;
+  rightCount: number;
+  leftPercent: number;
+  centerPercent: number;
+  rightPercent: number;
+  topPublishers: { name: string; count: number; bias: string | null }[];
+  blindspotBias: string | null; // which bias you read least
 };
 
 export type UserRole = User["role"];
 export type ArticleStatus = Article["status"];
 export type Bias = Article["bias"];
+export type Factuality = Publisher["factualityRating"];
+export type OwnerType = Publisher["ownerType"];

@@ -104,7 +104,6 @@ export default function PublishersPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold truncate">{pub.name}</p>
-                        {pub.country && <p className="text-[10px] text-muted-foreground">{pub.country}</p>}
                       </div>
                       {pub.biasRating && <BiasChip bias={pub.biasRating} size="xs" />}
                     </button>
@@ -135,9 +134,7 @@ export default function PublishersPage() {
                       {selectedPublisher.description && (
                         <p className="text-sm text-muted-foreground mb-2">{selectedPublisher.description}</p>
                       )}
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                        {selectedPublisher.country && <span>{selectedPublisher.country}</span>}
-                        {selectedPublisher.founded && <span>Est. {selectedPublisher.founded}</span>}
+                      <div className="flex gap-4">
                         {selectedPublisher.website && (
                           <a href={selectedPublisher.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-primary hover:underline">
                             <ExternalLink className="w-3 h-3" />{selectedPublisher.website}
@@ -176,12 +173,10 @@ export default function PublishersPage() {
                         </div>
                         <div>
                           <p className="text-sm font-bold">{pub.name}</p>
-                          {pub.country && <p className="text-[10px] text-muted-foreground">{pub.country}</p>}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         {pub.biasRating && <BiasChip bias={pub.biasRating} size="xs" />}
-                        {pub.founded && <span className="text-[10px] text-muted-foreground">Est. {pub.founded}</span>}
                       </div>
                     </button>
                   ))}

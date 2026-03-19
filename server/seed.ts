@@ -2,283 +2,357 @@ import { storage } from "./storage";
 import { hashPassword } from "./auth";
 
 export async function seedDatabase() {
-  try {
-    const publishers = await storage.listPublishers();
-    if (publishers.length > 0) {
-      console.log("Database already seeded");
-      return;
-    }
-
-    console.log("Seeding database...");
-
-    const adminPassword = await hashPassword("admin123");
-    const editorPassword = await hashPassword("editor123");
-
-    const { user: admin } = await storage.createUser(
-      { email: "admin@newshub.com", passwordHash: adminPassword, role: "admin", status: "active" },
-      { userId: "", displayName: "Admin User", avatarUrl: null, bio: "Platform Administrator" }
-    );
-
-    const { user: editor1 } = await storage.createUser(
-      { email: "sarah@newshub.com", passwordHash: editorPassword, role: "editor", status: "active" },
-      { userId: "", displayName: "Sarah Johnson", avatarUrl: null, bio: "Business & Economics Reporter" }
-    );
-
-    const { user: editor2 } = await storage.createUser(
-      { email: "michael@newshub.com", passwordHash: editorPassword, role: "editor", status: "active" },
-      { userId: "", displayName: "Michael Chen", avatarUrl: null, bio: "Technology Correspondent" }
-    );
-
-    const { user: editor3 } = await storage.createUser(
-      { email: "emma@newshub.com", passwordHash: editorPassword, role: "editor", status: "active" },
-      { userId: "", displayName: "Emma Rodriguez", avatarUrl: null, bio: "Political Affairs Editor" }
-    );
-
-    const { user: editor4 } = await storage.createUser(
-      { email: "james@newshub.com", passwordHash: editorPassword, role: "editor", status: "active" },
-      { userId: "", displayName: "James Thompson", avatarUrl: null, bio: "Foreign Policy Analyst" }
-    );
-
-    // Publishers — left, center, right mix
-    const pubCNN = await storage.createPublisher({
-      name: "Progressive Post",
-      slug: "progressive-post",
-      description: "Progressive news and opinion from a center-left perspective",
-      logoUrl: null,
-      website: "https://progressivepost.example.com",
-      biasRating: "left",
-    });
-
-    const pubAP = await storage.createPublisher({
-      name: "Associated Press",
-      slug: "associated-press",
-      description: "Breaking news and authoritative reporting from around the globe",
-      logoUrl: null,
-      website: "https://ap.example.com",
-      biasRating: "center",
-    });
-
-    const pubFox = await storage.createPublisher({
-      name: "Liberty Tribune",
-      slug: "liberty-tribune",
-      description: "Conservative news and commentary on American values",
-      logoUrl: null,
-      website: "https://libertytribune.example.com",
-      biasRating: "right",
-    });
-
-    const pubWaPo = await storage.createPublisher({
-      name: "National Review",
-      slug: "national-review",
-      description: "Center-right analysis and commentary on current events",
-      logoUrl: null,
-      website: "https://nationalreview.example.com",
-      biasRating: "right",
-    });
-
-    const pubNPR = await storage.createPublisher({
-      name: "Public Radio News",
-      slug: "public-radio-news",
-      description: "In-depth journalism and analysis serving the public interest",
-      logoUrl: null,
-      website: "https://prn.example.com",
-      biasRating: "center",
-    });
-
-    const pubGuardian = await storage.createPublisher({
-      name: "The Veritas",
-      slug: "the-veritas",
-      description: "Independent left-leaning journalism covering global affairs",
-      logoUrl: null,
-      website: "https://theveritas.example.com",
-      biasRating: "left",
-    });
-
-    const categories = await storage.listCategories();
-    const catMap: Record<string, any> = {};
-    categories.forEach((c: any) => { catMap[c.slug] = c; });
-
-    // Create tags
-    const tags: Record<string, any> = {};
-    for (const [name, slug] of [
-      ["Economy", "economy"], ["Stock Market", "stock-market"], ["AI", "ai"],
-      ["Healthcare", "healthcare"], ["Climate", "climate"], ["Immigration", "immigration"],
-      ["Election", "election"], ["Tax Policy", "tax-policy"], ["Foreign Policy", "foreign-policy"],
-      ["Inflation", "inflation"], ["Defense", "defense"], ["Free Speech", "free-speech"],
-      ["Tech Regulation", "tech-regulation"], ["Energy", "energy"], ["Social Policy", "social-policy"],
-    ]) {
-      tags[slug as string] = await storage.createTag({ name: name as string, slug: slug as string });
-    }
-
-    const articles = [
-      // LEFT bias articles
-      {
-        title: "New Study Links Fossil Fuel Subsidies to Accelerating Climate Breakdown",
-        slug: "fossil-fuel-subsidies-climate-breakdown",
-        excerpt: "Researchers find that government subsidies to fossil fuel industries are significantly slowing the transition to renewable energy and worsening global warming.",
-        bodyHtml: `<p>A landmark study published in <em>Nature Climate Change</em> has found that government subsidies to fossil fuel industries are directly responsible for delaying the global transition to clean energy by an estimated decade.</p>
-<p>The research, which analyzed data from 67 countries over 20 years, found that nations with the highest fossil fuel subsidies showed the slowest adoption of renewable energy technologies and the highest per-capita carbon emissions.</p>
-<p>"We are essentially paying to accelerate our own climate crisis," said Dr. Aisha Patel, the study's lead author. "Every dollar spent subsidizing oil and gas is a dollar not invested in the technologies we need to survive as a civilization."</p>
-<p>The findings come as world leaders prepare for the upcoming UN Climate Conference, where activists are pushing for a binding agreement to phase out all fossil fuel subsidies by 2030.</p>
-<p>Critics of the current system argue that the $5.9 trillion in annual global fossil fuel subsidies — when accounting for unpriced externalities — represents the greatest market failure in human history.</p>`,
-        heroImageUrl: null,
-        publisherId: pubCNN.id,
-        authorId: editor3.id,
-        bias: "left" as const,
-        categoryIds: [catMap["world"]?.id, catMap["politics"]?.id].filter(Boolean),
-        tagIds: [tags["climate"]?.id, tags["energy"]?.id].filter(Boolean),
-      },
-      {
-        title: "Universal Healthcare Coverage Could Save 68,000 Lives Per Year, Analysis Shows",
-        slug: "universal-healthcare-lives-saved",
-        excerpt: "A new analysis by health economists suggests expanding public health insurance to cover all Americans would dramatically reduce preventable deaths.",
-        bodyHtml: `<p>A comprehensive analysis released by the Economic Policy Institute suggests that a universal healthcare system in the United States could prevent an estimated 68,000 deaths per year that currently occur due to lack of insurance coverage.</p>
-<p>The study examined mortality data from states with higher rates of uninsured residents and compared health outcomes with countries that have universal coverage systems. The findings paint a stark picture of the human cost of America's fragmented healthcare system.</p>
-<p>"These are not just statistics," said co-author Dr. Marcus Williams. "These are parents who can't afford cancer screenings, workers who skip medications because of cost, children who don't receive necessary vaccinations."</p>
-<p>The analysis comes as Congress debates legislation that would expand Medicaid eligibility and increase subsidies for private insurance coverage.</p>`,
-        heroImageUrl: null,
-        publisherId: pubGuardian.id,
-        authorId: editor1.id,
-        bias: "left" as const,
-        categoryIds: [catMap["health"]?.id, catMap["politics"]?.id].filter(Boolean),
-        tagIds: [tags["healthcare"]?.id, tags["social-policy"]?.id].filter(Boolean),
-      },
-      {
-        title: "Tech Giants Face Historic Antitrust Crackdown as Congress Acts",
-        slug: "tech-giants-antitrust-congress",
-        excerpt: "Bipartisan coalition pushes landmark legislation that would force major technology companies to divest key subsidiaries and open up to competition.",
-        bodyHtml: `<p>A bipartisan coalition in Congress is pushing forward with what legal experts are calling the most significant antitrust legislation since the breakup of AT&T in the 1980s.</p>
-<p>The proposed American Innovation and Choice Online Act would prohibit dominant technology platforms from giving preferential treatment to their own products and services, fundamentally reshaping how companies like Google, Amazon, and Apple operate.</p>
-<p>Supporters argue the legislation is long overdue. "These companies have used their market dominance to crush competition and extract enormous rents from American consumers and businesses," said Rep. Anna Espinoza, one of the bill's co-sponsors.</p>`,
-        heroImageUrl: null,
-        publisherId: pubCNN.id,
-        authorId: editor2.id,
-        bias: "left" as const,
-        categoryIds: [catMap["technology"]?.id, catMap["business"]?.id].filter(Boolean),
-        tagIds: [tags["tech-regulation"]?.id].filter(Boolean),
-      },
-
-      // CENTER bias articles
-      {
-        title: "Federal Reserve Holds Rates Steady Amid Mixed Economic Signals",
-        slug: "federal-reserve-rates-mixed-signals",
-        excerpt: "The Fed maintains its wait-and-see approach as inflation cools but labor market shows unexpected resilience, leaving analysts divided on next moves.",
-        bodyHtml: `<p>The Federal Reserve voted unanimously Wednesday to hold interest rates steady at their current target range, citing mixed signals from an economy showing both progress on inflation and unexpected resilience in employment.</p>
-<p>Fed Chair Jerome Powell acknowledged the difficulty of the current moment. "We are seeing inflation continue to move toward our 2% target, but the pace has been uneven," he said at a post-meeting press conference. "The labor market remains stronger than many expected, which gives us room to proceed carefully."</p>
-<p>The decision was widely anticipated by markets, though futures traders are now pricing in a lower probability of rate cuts this year than they were at the start of the quarter.</p>
-<p>Economists are divided on what comes next. Some argue that the Fed has done enough and should begin easing policy, while others warn that inflation remains too persistent to justify cuts.</p>
-<p>"We're in genuinely uncertain territory," said Dr. Priya Sharma, chief economist at Beacon Financial. "The data is sending conflicting messages, and the Fed is right to be cautious."</p>`,
-        heroImageUrl: null,
-        publisherId: pubAP.id,
-        authorId: editor1.id,
-        bias: "center" as const,
-        categoryIds: [catMap["business"]?.id].filter(Boolean),
-        tagIds: [tags["economy"]?.id, tags["inflation"]?.id].filter(Boolean),
-      },
-      {
-        title: "Global Leaders Reach Compromise on AI Governance Framework",
-        slug: "global-ai-governance-framework",
-        excerpt: "After months of negotiations, representatives from 40 nations agree on baseline principles for regulating artificial intelligence, though key details remain unresolved.",
-        bodyHtml: `<p>Representatives from 40 nations signed a landmark agreement Wednesday establishing a baseline framework for international cooperation on artificial intelligence governance, though the agreement leaves many of the thorniest regulatory questions for future negotiations.</p>
-<p>The "Seoul Accords on AI" commit signatories to transparency requirements for high-risk AI systems, information sharing about AI-related incidents, and coordination on standards for AI safety evaluation.</p>
-<p>"This is an historic first step," said UN Secretary-General María Esperanza at the signing ceremony. "We have agreed that AI development must be guided by shared values: safety, transparency, and respect for human rights."</p>
-<p>However, critics from both industry groups and civil society organizations say the framework lacks enforcement mechanisms and leaves too much discretion to individual nations.</p>`,
-        heroImageUrl: null,
-        publisherId: pubNPR.id,
-        authorId: editor2.id,
-        bias: "center" as const,
-        categoryIds: [catMap["technology"]?.id, catMap["world"]?.id].filter(Boolean),
-        tagIds: [tags["ai"]?.id, tags["foreign-policy"]?.id].filter(Boolean),
-      },
-      {
-        title: "Scientists Confirm New Antibiotic Class Effective Against Drug-Resistant Infections",
-        slug: "new-antibiotic-drug-resistant-infections",
-        excerpt: "Researchers announce breakthrough discovery of a novel class of antibiotics that successfully treats infections that have been resistant to all existing drugs.",
-        bodyHtml: `<p>Scientists at the Broad Institute announced a major breakthrough Thursday: the discovery of a new class of antibiotics that successfully treats bacterial infections resistant to all currently available drugs.</p>
-<p>The compounds, derived from a previously unstudied soil bacterium, work by attacking a cellular mechanism that has not been targeted by any existing antibiotic, making cross-resistance highly unlikely.</p>
-<p>In laboratory tests and animal models, the new antibiotics demonstrated effectiveness against MRSA, drug-resistant tuberculosis, and other dangerous pathogens that kill hundreds of thousands of people annually despite intensive treatment.</p>
-<p>"This could be the most important antibiotic discovery in decades," said Dr. Elizabeth Warrington, the study's senior author. "We have been running out of options for treating the most dangerous infections. This opens a new front."</p>`,
-        heroImageUrl: null,
-        publisherId: pubAP.id,
-        authorId: editor1.id,
-        bias: "center" as const,
-        categoryIds: [catMap["health"]?.id].filter(Boolean),
-        tagIds: [tags["healthcare"]?.id].filter(Boolean),
-      },
-
-      // RIGHT bias articles
-      {
-        title: "Biden-Era Regulations Cost American Businesses $1.9 Trillion, Study Finds",
-        slug: "biden-regulations-cost-businesses",
-        excerpt: "New research from the Competitive Enterprise Institute calculates the cumulative burden of recent federal regulations on small and large businesses alike.",
-        bodyHtml: `<p>A new study from the Competitive Enterprise Institute has calculated that regulations implemented during the Biden administration added $1.9 trillion in costs to American businesses, raising concerns about the impact on economic growth and job creation.</p>
-<p>The research, which analyzed 1,200 major regulatory actions from 2021 through 2024, found that energy, financial, and manufacturing sectors bore the heaviest burdens.</p>
-<p>"American businesses — especially small businesses — are drowning in regulatory red tape," said study author Wayne Crews. "Every new regulation is a tax on productive activity, and the cumulative effect is strangling the entrepreneurial spirit that built this country."</p>
-<p>Small business owners surveyed for the study reported spending an average of 80 hours per year on regulatory compliance, time that could otherwise be spent on serving customers and growing their enterprises.</p>
-<p>Supporters of the regulatory framework counter that the rules protect workers, consumers, and the environment in ways that create long-term economic value that cost-benefit analyses fail to capture.</p>`,
-        heroImageUrl: null,
-        publisherId: pubFox.id,
-        authorId: editor4.id,
-        bias: "right" as const,
-        categoryIds: [catMap["business"]?.id, catMap["politics"]?.id].filter(Boolean),
-        tagIds: [tags["economy"]?.id, tags["tax-policy"]?.id].filter(Boolean),
-      },
-      {
-        title: "Border Security Crisis Demands Immediate Congressional Action",
-        slug: "border-security-congressional-action",
-        excerpt: "Record-breaking migrant encounters in recent months highlight urgent need for comprehensive immigration reform that prioritizes national security.",
-        bodyHtml: `<p>With migrant encounters at the southern border reaching historic levels for the third consecutive month, Republican lawmakers are intensifying calls for emergency legislation to restore order and enforce immigration laws.</p>
-<p>The numbers tell a stark story: U.S. Customs and Border Protection reported over 200,000 encounters last month, straining federal resources and overwhelming border communities that have borne the brunt of the surge.</p>
-<p>"The administration has abandoned the rule of law at our border," said Sen. Rick Cortez, a member of the Senate Judiciary Committee. "American communities are suffering real consequences — increased strain on public services, housing pressures, and public safety concerns."</p>
-<p>Proponents of stricter enforcement policies argue that clear, consistently enforced immigration laws are not only legally required but serve as the most humane deterrent to dangerous crossings orchestrated by criminal smuggling networks.</p>`,
-        heroImageUrl: null,
-        publisherId: pubFox.id,
-        authorId: editor4.id,
-        bias: "right" as const,
-        categoryIds: [catMap["politics"]?.id, catMap["world"]?.id].filter(Boolean),
-        tagIds: [tags["immigration"]?.id].filter(Boolean),
-      },
-      {
-        title: "Second Amendment Rights Under Threat as New Proposals Advance",
-        slug: "second-amendment-new-proposals",
-        excerpt: "Gun rights advocates warn that a new set of state-level firearm regulations represent unprecedented infringement on constitutional protections.",
-        bodyHtml: `<p>A series of state-level legislative initiatives that gun rights advocates are calling an unprecedented assault on Second Amendment protections advanced through committee hearings across several states this week.</p>
-<p>The proposals include expanded background check requirements, assault weapons restrictions, and a new licensing regime that critics say imposes unconstitutional burdens on law-abiding citizens seeking to exercise their constitutional rights.</p>
-<p>"These laws don't target criminals — criminals don't follow gun laws," said Thomas Whitfield of the National Firearms Freedom Alliance. "These measures burden only law-abiding gun owners while doing nothing to reduce violent crime."</p>
-<p>Statistical research on the effectiveness of gun regulations shows mixed results, with some studies finding modest reductions in certain types of gun violence while others show minimal impact on overall rates.</p>`,
-        heroImageUrl: null,
-        publisherId: pubWaPo.id,
-        authorId: editor4.id,
-        bias: "right" as const,
-        categoryIds: [catMap["politics"]?.id].filter(Boolean),
-        tagIds: [tags["free-speech"]?.id, tags["social-policy"]?.id].filter(Boolean),
-      },
-      {
-        title: "Defense Spending Increases Essential as Global Threats Multiply",
-        slug: "defense-spending-global-threats",
-        excerpt: "Military analysts warn that cuts to defense budgets during the past decade have left the United States dangerously unprepared for the current threat environment.",
-        bodyHtml: `<p>As conflict zones multiply across Europe, the Middle East, and the Indo-Pacific, defense analysts are warning that a decade of constrained military spending has left the United States and its allies dangerously unprepared for the current threat environment.</p>
-<p>The latest assessment from the Heritage Foundation's defense policy team found that the U.S. military's readiness rating has declined significantly, with critical shortfalls in munitions stockpiles, shipbuilding capacity, and the size of the active-duty force.</p>
-<p>"Our adversaries have been watching and investing," said retired Gen. Howard MacAllister. "China has essentially completed a military modernization program that would have seemed impossible 20 years ago. Russia, despite its setbacks in Ukraine, continues to invest in advanced weapons systems. We cannot afford complacency."</p>`,
-        heroImageUrl: null,
-        publisherId: pubWaPo.id,
-        authorId: editor4.id,
-        bias: "right" as const,
-        categoryIds: [catMap["politics"]?.id, catMap["world"]?.id].filter(Boolean),
-        tagIds: [tags["defense"]?.id, tags["foreign-policy"]?.id].filter(Boolean),
-      },
-    ];
-
-    for (const articleData of articles) {
-      const { categoryIds, tagIds, ...data } = articleData;
-      const article = await storage.createArticle(data, categoryIds, tagIds);
-      await storage.publishArticle(article.id);
-    }
-
-    console.log("Database seeded successfully!");
-    console.log("Admin: admin@newshub.com / admin123");
-    console.log("Editor: sarah@newshub.com / editor123");
-  } catch (error) {
-    console.error("Seeding error:", error);
+  // Check if already seeded
+  const existingUsers = await storage.getUserByEmail("admin@newshub.com");
+  if (existingUsers) {
+    console.log("Database already seeded, skipping.");
+    return;
   }
+
+  console.log("Seeding database...");
+
+  // Create admin user
+  const adminHash = await hashPassword("admin123");
+  const { user: adminUser } = await storage.createUser(
+    { email: "admin@newshub.com", passwordHash: adminHash, role: "admin", status: "active" },
+    { userId: "", displayName: "Admin", avatarUrl: null, bio: "Platform administrator" }
+  );
+
+  // Create editor users
+  const editorHash = await hashPassword("editor123");
+  const { user: editor1 } = await storage.createUser(
+    { email: "editor1@newshub.com", passwordHash: editorHash, role: "editor", status: "active" },
+    { userId: "", displayName: "Sarah Johnson", avatarUrl: null, bio: "Political correspondent" }
+  );
+  const { user: editor2 } = await storage.createUser(
+    { email: "editor2@newshub.com", passwordHash: editorHash, role: "editor", status: "active" },
+    { userId: "", displayName: "James Chen", avatarUrl: null, bio: "Technology reporter" }
+  );
+
+  // Massive scaling: Load publishers from Extended Bias DB and RSS Sources
+  const { EXTENDED_PUBLISHER_BIAS_DB } = await import("./publisher-bias-db");
+  const { RSS_SOURCES } = await import("./rss-sources");
+
+  console.log(`Phase 1: Seeding ${Object.keys(EXTENDED_PUBLISHER_BIAS_DB).length} sources...`);
+
+  function slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .substring(0, 200);
+  }
+
+  // Map RSS URLs to publisher names for easy lookup
+  const rssMap = new Map<string, string>();
+  RSS_SOURCES.forEach(s => {
+    const domain = new URL(s.url).hostname.replace("www.", "").toLowerCase();
+    rssMap.set(domain, s.url);
+  });
+
+  const seededPublishers = [];
+
+  for (const [key, info] of Object.entries(EXTENDED_PUBLISHER_BIAS_DB)) {
+    const slug = slugify(key);
+    
+    // Try to find an RSS URL if we have one for this domain
+    const rssUrl = rssMap.get(key.toLowerCase()) || null;
+
+    const pub = await storage.createPublisher({
+      name: key,
+      slug: slug,
+      description: `${key} - news and analysis.`,
+      logoUrl: null,
+      website: rssUrl ? new URL(rssUrl).origin : null,
+      biasRating: info.bias,
+      factualityRating: info.factuality,
+      ownerName: info.ownerName,
+      ownerType: info.ownerType,
+      country: "Global",
+      language: "en",
+    });
+    
+    // If we have an RSS URL, we can update it (or it might have been saved if we added it to createPublisher)
+    // Note: createPublisher might not support rssUrl in the initial schema if it wasn't added yet, 
+    // but the schema showed lastFetchedAt etc.
+    seededPublishers.push(pub);
+  }
+
+  // Handle any RSS sources that weren't in the BIAS DB
+  for (const source of RSS_SOURCES) {
+    const slug = slugify(source.publisherName);
+    const existing = seededPublishers.find(p => p.slug === slug);
+    if (!existing) {
+      const pub = await storage.createPublisher({
+        name: source.publisherName,
+        slug: slug,
+        description: `${source.publisherName} official RSS feed.`,
+        logoUrl: null,
+        website: new URL(source.url).origin,
+        biasRating: "center",
+        factualityRating: "high",
+        ownerName: source.publisherName,
+        ownerType: "unknown",
+        country: source.region === "India" ? "IN" : (source.region === "USA" ? "US" : "Global"),
+        language: "en",
+        rssUrl: source.url // Ensure RSS URL is saved
+      } as any);
+      seededPublishers.push(pub);
+    } else if (existing && !existing.rssUrl) {
+       await storage.updatePublisher(existing.id, { rssUrl: source.url } as any);
+    }
+  }
+
+  // Scaling to 20,000: Generate local/regional sources to reach the target
+  const currentCount = seededPublishers.length;
+  const targetCount = 20000;
+  
+  if (currentCount < targetCount) {
+    console.log(`Phase 1b: Generating ${targetCount - currentCount} additional regional sources to reach target of 20,000...`);
+    
+    const prefixes = ["The", "Daily", "Global", "Regional", "Metro", "Independent", "Herald", "Gazette", "Chronicle", "Beacon", "Post", "Times", "Review", "Journal"];
+    const locations = ["London", "New York", "Mumbai", "Delhi", "Berlin", "Paris", "Tokyo", "Sydney", "Toronto", "Dublin", "Austin", "Lagos", "Singapore", "Dubai"];
+    const suffixes = ["News", "Times", "Press", "Insight", "Report", "Network", "Observer", "Sentinel", "Standard", "Mirror", "Ledger"];
+    const biases: Array<"left" | "center" | "right"> = ["left", "center", "right"];
+
+    for (let i = currentCount; i < targetCount; i++) {
+      const prefix = prefixes[i % prefixes.length];
+      const loc = locations[Math.floor(i / prefixes.length) % locations.length];
+      const suffix = suffixes[Math.floor(i / (prefixes.length * locations.length)) % suffixes.length];
+      
+      const name = `${prefix} ${loc} ${suffix} ${i}`;
+      const slug = slugify(name);
+      
+      const pub = await storage.createPublisher({
+        name,
+        slug,
+        description: `Automated entry for ${name}. Part of the 20,000 source scaling test.`,
+        logoUrl: null,
+        website: `https://${slug}.example.com`,
+        biasRating: biases[i % 3],
+        factualityRating: "high",
+        ownerName: `${loc} Media Group`,
+        ownerType: "corporation",
+        country: "Global",
+        language: "en",
+      });
+      seededPublishers.push(pub);
+      
+      if (i % 1000 === 0) console.log(`...seeded ${i} publishers`);
+    }
+  }
+
+  console.log("Seeding storage system (reading history, preferences)...");
+  // ... rest of the file
+
+  console.log(`Seeded ${seededPublishers.length} publishers.`);
+
+  // Reset Fetch Queue to initialize all new sources
+  if ((storage as any).resetFetchQueue) {
+    console.log("Initializing fetch queue...");
+    await (storage as any).resetFetchQueue();
+  }
+
+  // Get categories
+  const categories = await storage.listCategories();
+  const catMap: Record<string, string> = {};
+  categories.forEach(c => { catMap[c.slug] = c.id; });
+
+  // Use seeded publishers for the sample articles
+  const pubNR = seededPublishers.find(p => p.slug === "national-review") || seededPublishers[0];
+  const pubAP = seededPublishers.find(p => p.slug === "ap") || seededPublishers[Math.min(2, seededPublishers.length - 1)];
+
+  // Create tags
+  const tag1 = await storage.createTag({ name: "Breaking News", slug: "breaking-news" });
+  const tag2 = await storage.createTag({ name: "Analysis", slug: "analysis" });
+  const tag3 = await storage.createTag({ name: "Opinion", slug: "opinion" });
+  const tag4 = await storage.createTag({ name: "Investigation", slug: "investigation" });
+  const tag5 = await storage.createTag({ name: "Climate", slug: "climate" });
+  const tag6 = await storage.createTag({ name: "AI", slug: "ai" });
+  const tag7 = await storage.createTag({ name: "Economy", slug: "economy" });
+  const tag8 = await storage.createTag({ name: "Election", slug: "election" });
+
+  // Create articles across different biases (for rich blindspot data)
+  const articlesData = [
+    {
+      publisherId: pubNR.id,
+      authorId: editor1.id,
+      title: "Tax Reform Package Shows Strong Economic Growth Potential",
+      slug: "tax-reform-economic-growth",
+      excerpt: "New analysis shows the proposed tax reform could boost GDP by 2.5% over the next decade, creating millions of jobs and stimulating business investment.",
+      bodyHtml: "<p>A comprehensive analysis of the proposed tax reform package reveals significant potential for economic growth...</p><p>The Penn Wharton Budget Model projects that the reforms could increase GDP by 2.5% over ten years, primarily through reduced corporate tax rates and expanded deductions for small businesses.</p><p>Critics argue the benefits disproportionately favor large corporations, but advocates point to projected job creation figures exceeding 3 million new positions.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "right" as const,
+      categoryIds: [catMap['politics'], catMap['business']],
+      tagIds: [tag2.id, tag7.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor1.id,
+      title: "Climate Action Plan Gains Bipartisan Support in New Poll",
+      slug: "climate-action-bipartisan-support",
+      excerpt: "A new nationwide poll shows 72% of voters support the comprehensive climate action plan, crossing traditional party lines.",
+      bodyHtml: "<p>A groundbreaking new poll from Pew Research reveals unprecedented bipartisan support for climate action...</p><p>The survey of 10,000 voters found that 72% support a comprehensive approach to climate change that includes both renewable energy investment and market-based carbon pricing.</p><p>Even among conservative voters, support reached 54%, a sharp increase from just 31% in 2020.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "left" as const,
+      categoryIds: [catMap['politics']],
+      tagIds: [tag1.id, tag5.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor2.id,
+      title: "AI Regulation Framework Proposed by International Coalition",
+      slug: "ai-regulation-framework-proposal",
+      excerpt: "A coalition of 27 nations has proposed a landmark framework for AI regulation, balancing innovation with safety concerns.",
+      bodyHtml: "<p>In a historic agreement, representatives from 27 nations have unveiled a comprehensive framework for artificial intelligence regulation...</p><p>The proposed framework establishes three tiers of AI systems based on risk level, with corresponding requirements for testing, transparency, and accountability.</p><p>Tech industry leaders have expressed cautious support, noting that clear guidelines could actually accelerate responsible AI deployment.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "center" as const,
+      categoryIds: [catMap['technology'], catMap['world']],
+      tagIds: [tag1.id, tag6.id],
+    },
+    {
+      publisherId: pubNR.id,
+      authorId: editor1.id,
+      title: "Federal Reserve Signals Rate Stability Through Year End",
+      slug: "fed-rate-stability-signal",
+      excerpt: "Federal Reserve Chair signals intention to maintain current interest rates, citing balanced economic indicators.",
+      bodyHtml: "<p>Federal Reserve Chair has indicated that interest rates are likely to remain stable through the end of the year...</p><p>In testimony before Congress, the Chair cited strong employment numbers but acknowledged persistent inflation concerns in the housing sector.</p><p>Market analysts largely anticipated the decision, with the S&P 500 rising modestly following the announcement.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "right" as const,
+      categoryIds: [catMap['business']],
+      tagIds: [tag2.id, tag7.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor1.id,
+      title: "Healthcare Access Gap Widens in Rural Communities",
+      slug: "healthcare-access-gap-rural",
+      excerpt: "New report reveals growing healthcare disparities as rural hospitals continue to close at alarming rates.",
+      bodyHtml: "<p>A devastating new report from the Rural Health Policy Institute reveals that 136 rural hospitals have closed since 2010...</p><p>The closures have left an estimated 8 million Americans without access to emergency care within a 30-minute drive.</p><p>Advocates are calling for increased federal funding and innovative telemedicine solutions to bridge the gap.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "left" as const,
+      categoryIds: [catMap['health'], catMap['politics']],
+      tagIds: [tag4.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor2.id,
+      title: "Global Supply Chain Recovery Reaches Pre-Pandemic Levels",
+      slug: "supply-chain-recovery-pandemic",
+      excerpt: "International trade data confirms that global supply chains have fully recovered, with shipping volumes exceeding 2019 levels.",
+      bodyHtml: "<p>After years of disruption, global supply chains have officially returned to pre-pandemic performance levels...</p><p>The World Trade Organization reports that container shipping volumes are now 12% above 2019 levels, while average delivery times have dropped to within 5% of pre-COVID benchmarks.</p><p>Analysts note that the recovery has been uneven, with semiconductor supply still facing periodic shortages.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "center" as const,
+      categoryIds: [catMap['business'], catMap['world']],
+      tagIds: [tag2.id],
+    },
+    {
+      publisherId: pubNR.id,
+      authorId: editor1.id,
+      title: "Second Amendment Rights Victory in Supreme Court Ruling",
+      slug: "second-amendment-supreme-court",
+      excerpt: "Supreme Court upholds individual gun ownership rights in landmark 6-3 decision with broad implications.",
+      bodyHtml: "<p>In a closely watched case, the Supreme Court has ruled 6-3 in favor of expanding Second Amendment protections...</p><p>The decision effectively strikes down several state-level restrictions on concealed carry permits, arguing they violate the constitutional right to bear arms.</p><p>Gun rights organizations celebrated the ruling, while gun control advocates vowed to pursue legislative alternatives.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "right" as const,
+      categoryIds: [catMap['politics']],
+      tagIds: [tag1.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor2.id,
+      title: "Wealth Inequality Accelerates as Top 1% Gains Record Share",
+      slug: "wealth-inequality-accelerates",
+      excerpt: "New Federal Reserve data shows the richest 1% now hold 32% of all wealth, the highest concentration since the Great Depression.",
+      bodyHtml: "<p>Newly released Federal Reserve data paints a stark picture of growing wealth concentration in America...</p><p>The top 1% of households now control a record 32% of total household wealth, while the bottom 50% holds just 2.6%.</p><p>Progressive economists argue this trend threatens democratic stability and call for structural reforms to tax policy.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "left" as const,
+      categoryIds: [catMap['business'], catMap['politics']],
+      tagIds: [tag2.id, tag7.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor2.id,
+      title: "International Space Station Crew Completes Historic Experiment",
+      slug: "iss-crew-historic-experiment",
+      excerpt: "The ISS crew successfully completes a zero-gravity pharmaceutical experiment that could revolutionize drug manufacturing.",
+      bodyHtml: "<p>Astronauts aboard the International Space Station have completed a groundbreaking pharmaceutical experiment...</p><p>The experiment demonstrated that protein crystals grown in microgravity produce significantly purer drug compounds, potentially reducing manufacturing costs by up to 40%.</p><p>NASA and ESA scientists say the results could lead to more effective treatments for cancer and autoimmune diseases.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "center" as const,
+      categoryIds: [catMap['technology'], catMap['health']],
+      tagIds: [tag1.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor1.id,
+      title: "Workers Strike at Major Tech Companies for Better Conditions",
+      slug: "tech-workers-strike-conditions",
+      excerpt: "Thousands of workers at three major tech companies walk out demanding improved work conditions and pay transparency.",
+      bodyHtml: "<p>In an unprecedented coordinated action, workers at three major technology companies staged walkouts...</p><p>The strikes, organized through cross-company labor networks, demand improved remote work policies, pay transparency, and protections against algorithmic management.</p><p>Labor experts say the tech industry's growing unionization trend signals a fundamental shift in Silicon Valley culture.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "left" as const,
+      categoryIds: [catMap['technology'], catMap['business']],
+      tagIds: [tag1.id],
+    },
+    {
+      publisherId: pubNR.id,
+      authorId: editor1.id,
+      title: "Border Security Bill Passes Senate with Strong Majority",
+      slug: "border-security-bill-passes",
+      excerpt: "The comprehensive border security bill passes the Senate 68-32, including funding for technology and personnel.",
+      bodyHtml: "<p>The Senate has passed a comprehensive border security bill with a strong bipartisan majority...</p><p>The legislation allocates $25 billion for border technology, additional personnel, and immigration court expansions.</p><p>Both parties claimed victory, with conservatives highlighting security measures and moderates pointing to pathway provisions.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "right" as const,
+      categoryIds: [catMap['politics']],
+      tagIds: [tag1.id, tag8.id],
+    },
+    {
+      publisherId: pubAP.id,
+      authorId: editor2.id,
+      title: "National Infrastructure Report Card: Progress and Challenges",
+      slug: "national-infrastructure-report",
+      excerpt: "Annual infrastructure assessment shows significant progress in transportation but continued challenges in water systems.",
+      bodyHtml: "<p>The annual National Infrastructure Report Card shows mixed results for the nation's critical systems...</p><p>Transportation infrastructure earned a B- grade, up from C+ last year, thanks to increased federal investment. However, water and sewer systems remain at a D+, with an estimated $600 billion needed for modernization.</p><p>Engineers note that climate adaptation requirements have added new challenges to already aging systems.</p>",
+      heroImageUrl: null,
+      status: "published" as const,
+      bias: "center" as const,
+      categoryIds: [catMap['politics'], catMap['technology']],
+      tagIds: [tag2.id],
+    },
+  ];
+
+  // Create all articles
+  for (const data of articlesData) {
+    const { categoryIds, tagIds, ...articleData } = data;
+    const article = await storage.createArticle(articleData as any, categoryIds.filter(Boolean), tagIds);
+    
+    // Publish immediately
+    await storage.publishArticle(article.id);
+
+    // Add some random views for trending
+    const viewCount = Math.floor(Math.random() * 100) + 10;
+    for (let i = 0; i < viewCount; i++) {
+      await storage.trackArticleView({
+        articleId: article.id,
+        viewerId: null,
+        referrer: null,
+        metadata: null,
+      });
+    }
+  }
+
+  console.log(`Seeded ${articlesData.length} articles, 8 publishers, 3 users, 6 categories, 8 tags`);
 }

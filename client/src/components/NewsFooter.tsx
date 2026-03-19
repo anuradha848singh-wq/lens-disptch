@@ -2,10 +2,11 @@ import { Link } from "wouter";
 
 const footerLinks = {
   News: [
-    { label: "Home Page", href: "/" },
+    { label: "Home", href: "/" },
     { label: "Local News", href: "/" },
     { label: "Blindspot Feed", href: "/blindspot" },
     { label: "International", href: "/" },
+    { label: "Topics", href: "/" },
   ],
   "International": [
     { label: "North America", href: "/" },
@@ -15,35 +16,29 @@ const footerLinks = {
     { label: "Australia", href: "/" },
     { label: "Africa", href: "/" },
   ],
-  Company: [
-    { label: "About", href: "/" },
-    { label: "History", href: "/" },
-    { label: "Mission", href: "/" },
-    { label: "Blog", href: "/" },
-    { label: "Group Subscriptions", href: "/" },
-    { label: "Subscribe", href: "/" },
-    { label: "Gift", href: "/" },
-    { label: "Free Trial", href: "/" },
-    { label: "Careers", href: "/" },
-    { label: "Affiliates", href: "/" },
+  Trending: [
+    { label: "Israel-Hamas War", href: "/" },
+    { label: "Donald Trump", href: "/" },
+    { label: "Joe Biden", href: "/" },
+    { label: "Ukraine War", href: "/" },
+    { label: "Climate Change", href: "/" },
+    { label: "Economy", href: "/" },
   ],
-  Help: [
-    { label: "Help Center", href: "/" },
-    { label: "FAQ", href: "/" },
+  Company: [
+    { label: "About Us", href: "/" },
+    { label: "Our Mission", href: "/" },
+    { label: "Careers", href: "/" },
+    { label: "Press Room", href: "/" },
     { label: "Contact Us", href: "/" },
-    { label: "Media Bias Ratings", href: "/" },
-    { label: "Ownership and Factuality Ratings", href: "/" },
-    { label: "Refund Code", href: "/" },
-    { label: "News Sources", href: "/publishers" },
-    { label: "Topics", href: "/" },
+    { label: "Bias Ratings", href: "/publishers" },
   ],
   Tools: [
-    { label: "App", href: "/" },
+    { label: "Mobile App", href: "/" },
     { label: "Browser Extension", href: "/" },
-    { label: "Daily Newsletter", href: "/" },
-    { label: "Blindspot Report Newsletter", href: "/" },
-    { label: "Your Bubble Newsletter", href: "/" },
-    { label: "Timelines", href: "/" },
+    { label: "Newsletters", href: "/" },
+    { label: "RSS Feeds", href: "/" },
+    { label: "API Access", href: "/" },
+    { label: "Gift Cards", href: "/" },
   ],
 };
 

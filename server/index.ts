@@ -1,11 +1,36 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { seedDatabase } from "./seed";
+import { startAutoFetch } from "./news-fetcher";
 import cookieParser from "cookie-parser";
 
 const app = express();
 app.use(cookieParser());
+
+// CORS Middleware for split deployment (Vercel Frontend + Railway Backend)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowedOrigins = [
+    process.env.CORS_ORIGIN,
+    "http://localhost:5000",
+    "http://localhost:3000",
+    "http://localhost:5173"
+  ].filter(Boolean);
+
+  if (origin && (allowedOrigins.includes(origin) || origin.endsWith(".vercel.app"))) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 declare module 'http' {
   interface IncomingMessage {
@@ -53,13 +78,13 @@ app.use((req, res, next) => {
   const server = await registerRoutes(app);
   
   await seedDatabase();
+  startAutoFetch();
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
-
+    console.error("Unhandled error:", err);
     res.status(status).json({ message });
-    throw err;
   });
 
   // importantly only setup vite in development and after
@@ -79,7 +104,6 @@ app.use((req, res, next) => {
   server.listen({
     port,
     host: "0.0.0.0",
-    reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
   });

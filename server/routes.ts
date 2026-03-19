@@ -8,8 +8,11 @@ import path from "path";
 import fs from "fs/promises";
 import { 
   insertUserSchema, insertUserProfileSchema, insertPublisherSchema,
-  insertCategorySchema, insertTagSchema, insertArticleSchema
+  insertCategorySchema, insertTagSchema, insertArticleSchema,
+  insertSystemSettingsSchema
 } from "@shared/schema";
+import { fetchFullContent } from "./article-scraper";
+import { findSourcesForArticle } from "./topic-search";
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -40,6 +43,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
   app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
+  // ==================== AUTH ====================
 
   app.post("/api/auth/register", async (req, res) => {
     try {
@@ -160,6 +165,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== PUBLISHERS ====================
+
   app.get("/api/publishers", async (req, res) => {
     try {
       const publishers = await storage.listPublishers();
@@ -214,6 +221,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== CATEGORIES & TAGS ====================
+
   app.get("/api/categories", async (req, res) => {
     try {
       const categories = await storage.listCategories();
@@ -256,6 +265,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== ARTICLES ====================
+
+  // IMPORTANT: /api/articles/trending and /api/articles/for-you MUST be before /api/articles/:id
+  app.get("/api/force-fetch", async (req, res) => {
+    try {
+      const { fetchRealNews } = await import("./news-fetcher");
+      const count = await fetchRealNews();
+      res.json({ success: true, count });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/articles/trending", async (req, res) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
+      const articles = await storage.getTrendingArticles(limit);
+      res.json(articles);
+    } catch (error) {
+      console.error("Trending articles error:", error);
+      res.status(500).json({ error: "Failed to get trending articles" });
+    }
+  });
+
+  app.get("/api/articles/for-you", authenticateUser, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      const articles = await storage.getForYouArticles(user.id, limit);
+      res.json(articles);
+    } catch (error) {
+      console.error("For-you articles error:", error);
+      res.status(500).json({ error: "Failed to get personalized articles" });
+    }
+  });
+
   app.get("/api/articles", optionalAuth, async (req, res) => {
     try {
       const { status, category, bias, search, limit, offset } = req.query;
@@ -286,6 +331,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/articles/:id/full-content", optionalAuth, async (req, res) => {
+    try {
+      const article = await storage.getArticle(req.params.id);
+      if (!article) return res.status(404).json({ error: "Article not found" });
+
+      if (article.fullContent) {
+        return res.json({ fullContent: article.fullContent });
+      }
+
+      if (!article.sourceUrl) {
+        return res.status(400).json({ error: "No source URL available for scraping" });
+      }
+
+      console.log(`[scraper] Fetching full content for: ${article.sourceUrl}`);
+      const scraped = await fetchFullContent(article.sourceUrl);
+      
+      if (scraped && scraped.bodyHtml) {
+        await storage.updateArticleContent(article.id, scraped.bodyHtml);
+        // Also update the 'fullContent' field specifically if we want to separate it
+        // For now, I'll update the main bodyHtml and also return it
+        res.json({ fullContent: scraped.bodyHtml });
+      } else {
+        res.status(500).json({ error: "Failed to extract content from source" });
+      }
+    } catch (error) {
+      console.error("Scrape error:", error);
+      res.status(500).json({ error: "Scraping failed" });
+    }
+  });
+
   app.get("/api/articles/:id", optionalAuth, async (req, res) => {
     try {
       const article = await storage.getArticle(req.params.id);
@@ -298,6 +373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Article not found" });
       }
 
+      // Track view
       await storage.trackArticleView({
         articleId: article.id,
         viewerId: user?.id || null,
@@ -305,10 +381,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         metadata: null,
       });
 
+      // Track reading history for logged-in users
+      if (user) {
+        await storage.trackReadingHistory(user.id, article.id);
+      }
+
       res.json(article);
     } catch (error) {
       console.error("Get article error:", error);
       res.status(500).json({ error: "Failed to get article" });
+    }
+  });
+
+  app.get("/api/articles/:id/related", optionalAuth, async (req, res) => {
+    try {
+      const related = await storage.getRelatedArticles(req.params.id);
+      res.json(related);
+    } catch (error) {
+      console.error("Get related articles error:", error);
+      res.status(500).json({ error: "Failed to get related articles" });
+    }
+  });
+
+  // ── Topic-Based Source Discovery (the Ground News killer feature) ──
+  app.get("/api/sources", optionalAuth, async (req, res) => {
+    try {
+      const articleId = req.query.articleId as string;
+      if (!articleId) {
+        return res.status(400).json({ error: "articleId is required" });
+      }
+      const result = await findSourcesForArticle(articleId);
+      if (!result) {
+        return res.status(404).json({ error: "Article not found" });
+      }
+      res.json(result);
+    } catch (error) {
+      console.error("Source discovery error:", error);
+      res.status(500).json({ error: "Failed to discover sources" });
     }
   });
 
@@ -394,6 +503,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== BOOKMARKS ====================
+
   app.get("/api/bookmarks", authenticateUser, async (req, res) => {
     try {
       const user = (req as any).user;
@@ -433,6 +544,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== UPLOAD ====================
+
   app.post("/api/upload", authenticateUser, upload.single('image'), async (req, res) => {
     try {
       if (!req.file) {
@@ -447,6 +560,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== ANALYTICS ====================
+
   app.get("/api/analytics/views/:articleId", authenticateUser, async (req, res) => {
     try {
       const views = await storage.getArticleViews(req.params.articleId);
@@ -454,6 +569,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get views error:", error);
       res.status(500).json({ error: "Failed to get views" });
+    }
+  });
+
+  // ==================== GROUND NEWS FEATURES ====================
+
+  // Blindspot
+  app.get("/api/blindspot", async (req, res) => {
+    try {
+      const result = await storage.getBlindspotArticles();
+      res.json(result);
+    } catch (error) {
+      console.error("Blindspot error:", error);
+      res.status(500).json({ error: "Failed to get blindspot articles" });
+    }
+  });
+
+  // My News Bias
+  app.get("/api/my-bias", authenticateUser, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const stats = await storage.getMyNewsBias(user.id);
+      res.json(stats);
+    } catch (error) {
+      console.error("My bias error:", error);
+      res.status(500).json({ error: "Failed to get bias stats" });
+    }
+  });
+
+  // Reading History
+  app.get("/api/history", authenticateUser, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      const history = await storage.getReadingHistory(user.id, limit);
+      res.json(history);
+    } catch (error) {
+      console.error("History error:", error);
+      res.status(500).json({ error: "Failed to get reading history" });
+    }
+  });
+
+  // Share tracking
+  app.post("/api/articles/:id/share", optionalAuth, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const { platform = "copy" } = req.body;
+      const event = await storage.trackShare(req.params.id, user?.id || null, platform);
+      res.json(event);
+    } catch (error) {
+      console.error("Share tracking error:", error);
+      res.status(500).json({ error: "Failed to track share" });
+    }
+  });
+
+  // User Preferences
+  app.get("/api/preferences", authenticateUser, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const prefs = await storage.getUserPreferences(user.id);
+      res.json(prefs || { userId: user.id, followedTopics: [], followedCategories: [], preferredBias: [], updatedAt: new Date() });
+    } catch (error) {
+      console.error("Get preferences error:", error);
+      res.status(500).json({ error: "Failed to get preferences" });
+    }
+  });
+
+  app.put("/api/preferences", authenticateUser, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const prefs = await storage.updateUserPreferences(user.id, req.body);
+      res.json(prefs);
+    } catch (error) {
+      console.error("Update preferences error:", error);
+      res.status(500).json({ error: "Failed to update preferences" });
+    }
+  });
+
+  // ==================== SYSTEM SETTINGS ====================
+
+  app.get("/api/settings", async (_req, res) => {
+    try {
+      const settings = await storage.getSystemSettings();
+      res.json(settings);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.patch("/api/settings", authenticateUser, async (req, res) => {
+    try {
+      const data = insertSystemSettingsSchema.partial().parse(req.body);
+      const updated = await storage.updateSystemSettings(data as any);
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof Error) {
+        res.status(400).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to update settings" });
+      }
     }
   });
 

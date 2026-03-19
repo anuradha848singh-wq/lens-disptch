@@ -1,6 +1,16 @@
-import { type ArticleWithDetails, type Publisher, type Category, type Tag } from "@shared/schema";
+import { 
+  type ArticleWithDetails, 
+  type Publisher, 
+  type Category, 
+  type Tag, 
+  type MyBiasStats, 
+  type ReadingHistoryEntry, 
+  type UserPreference, 
+  type ShareEvent, 
+  type SystemSettings 
+} from "@shared/schema";
 
-const BASE = "";
+const BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
@@ -45,6 +55,7 @@ export const api = {
       return request<{ articles: ArticleWithDetails[]; total: number }>(`/api/articles?${q}`);
     },
     get: (id: string) => request<ArticleWithDetails>(`/api/articles/${id}`),
+    related: (id: string) => request<ArticleWithDetails[]>(`/api/articles/${id}/related`),
     create: (data: any) => request<any>("/api/articles", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: any) =>
       request<any>(`/api/articles/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
@@ -52,6 +63,23 @@ export const api = {
       request<any>(`/api/articles/${id}/publish`, { method: "POST" }),
     delete: (id: string) =>
       request<any>(`/api/articles/${id}`, { method: "DELETE" }),
+    trending: (limit: number = 10) =>
+      request<ArticleWithDetails[]>(`/api/articles/trending?limit=${limit}`),
+    forYou: (limit: number = 20) =>
+      request<ArticleWithDetails[]>(`/api/articles/for-you?limit=${limit}`),
+    share: (id: string, platform: string = "copy") =>
+      request<ShareEvent>(`/api/articles/${id}/share`, {
+        method: "POST",
+        body: JSON.stringify({ platform }),
+      }),
+    listByPublisher: (publisherId: string, limit: number = 5) => 
+      request<{ articles: ArticleWithDetails[]; total: number }>(`/api/articles?publisherId=${publisherId}&limit=${limit}`),
+    listByCategory: (categoryId: string, limit: number = 6) => 
+      request<{ articles: ArticleWithDetails[]; total: number }>(`/api/articles?categoryId=${categoryId}&limit=${limit}`),
+    getFullContent: (id: string) => 
+      request<{ fullContent: string }>(`/api/articles/${id}/full-content`),
+    discoverSources: (articleId: string) =>
+      request<any>(`/api/sources?articleId=${articleId}`),
   },
 
   publishers: {
@@ -82,6 +110,27 @@ export const api = {
       request<any>("/api/bookmarks", { method: "POST", body: JSON.stringify({ articleId }) }),
     remove: (articleId: string) =>
       request<any>(`/api/bookmarks/${articleId}`, { method: "DELETE" }),
+  },
+
+  // Ground News features
+  blindspot: () =>
+    request<{ leftBlindspot: ArticleWithDetails[]; rightBlindspot: ArticleWithDetails[] }>("/api/blindspot"),
+
+  myBias: () => request<MyBiasStats>("/api/my-bias"),
+
+  history: (limit: number = 20) =>
+    request<(ReadingHistoryEntry & { article: ArticleWithDetails })[]>(`/api/history?limit=${limit}`),
+
+  preferences: {
+    get: () => request<UserPreference>("/api/preferences"),
+    update: (data: Partial<UserPreference>) =>
+      request<UserPreference>("/api/preferences", { method: "PUT", body: JSON.stringify(data) }),
+  },
+  
+  settings: {
+    get: () => request<SystemSettings>("/api/settings"),
+    update: (data: Partial<SystemSettings>) =>
+      request<SystemSettings>("/api/settings", { method: "PATCH", body: JSON.stringify(data) }),
   },
 
   upload: async (file: File) => {

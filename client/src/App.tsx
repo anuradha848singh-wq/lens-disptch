@@ -12,6 +12,9 @@ import AdminDashboard from "@/pages/AdminDashboard";
 import BookmarksPage from "@/pages/BookmarksPage";
 import PublishersPage from "@/pages/PublishersPage";
 import BlindspotPage from "@/pages/BlindspotPage";
+import MyBiasPage from "@/pages/MyBiasPage";
+import ReadingHistoryPage from "@/pages/ReadingHistoryPage";
+import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -24,6 +27,9 @@ function Router() {
       <Route path="/bookmarks" component={BookmarksPage} />
       <Route path="/publishers" component={PublishersPage} />
       <Route path="/blindspot" component={BlindspotPage} />
+      <Route path="/my-bias" component={MyBiasPage} />
+      <Route path="/history" component={ReadingHistoryPage} />
+      <Route path="/settings" component={SettingsPage} />
       <Route path="/for-you" component={HomePage} />
       <Route component={NotFound} />
     </Switch>

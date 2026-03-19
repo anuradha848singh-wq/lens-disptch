@@ -11,6 +11,8 @@ import { type ArticleWithDetails } from "@shared/schema";
 import { BiasBar } from "@/components/BiasBar";
 import { TrendingUp, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
+import useEmblaCarousel from "embla-carousel-react";
+import Autoplay from "embla-carousel-autoplay";
 
 function SkeletonCard() {
   return (
@@ -91,10 +93,12 @@ export default function HomePage() {
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [biasFilter, setBiasFilter] = useState<string | null>(null);
 
+  const [emblaRef] = useEmblaCarousel({ loop: true, align: "start", dragFree: true }, [Autoplay({ delay: 5000, stopOnInteraction: true })]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ["/api/articles", { category: categoryId, bias: biasFilter, search: searchQuery, limit: 30 }],
+    queryKey: ["/api/articles", { category: categoryId, bias: biasFilter, search: searchQuery, limit: 40 }],
     queryFn: () => api.articles.list({
-      limit: 30,
+      limit: 40,
       ...(categoryId && { category: categoryId }),
       ...(biasFilter && { bias: biasFilter }),
       ...(searchQuery && { search: searchQuery }),
@@ -109,21 +113,25 @@ export default function HomePage() {
 
   const bookmarkedIds = new Set((bookmarksData as ArticleWithDetails[]).map((a: ArticleWithDetails) => a.id));
   const articles: ArticleWithDetails[] = data?.articles ?? [];
+  
+  // Create the high-density partition
   const featured = articles[0];
-  const secondRow = articles.slice(1, 4);
-  const mainGrid = articles.slice(4);
+  const sideList = articles.slice(1, 5);
+  const slideWindow = articles.slice(5, 12);
+  const denseGrid = articles.slice(12, 18);
+  const tableRows = articles.slice(18, 30);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background text-foreground selection:bg-primary/20">
       <BreakingTicker />
       <MainNav onSearch={setSearchQuery} searchQuery={searchQuery} />
       <CategoryStrip selectedCategoryId={categoryId} onSelect={(id) => setCategoryId(id)} />
 
-      <div className="max-w-[1400px] mx-auto px-4 py-5">
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-6">
+      <div className="max-w-[1500px] mx-auto px-4 py-6">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-8">
 
           {/* Main content */}
-          <main>
+          <main className="min-w-0">
             <BiasFilterBar bias={biasFilter} onChange={setBiasFilter} total={data?.total ?? 0} />
 
             {isLoading ? (
@@ -131,42 +139,93 @@ export default function HomePage() {
                 {[...Array(6)].map((_, i) => <SkeletonCard key={i} />)}
               </div>
             ) : articles.length === 0 ? (
-              <div className="text-center py-20 text-muted-foreground">
-                <p className="text-lg font-semibold">No stories match your filters</p>
-                <button onClick={() => { setBiasFilter(null); setCategoryId(null); setSearchQuery(""); }} className="text-sm text-primary mt-2 hover:underline">
+              <div className="text-center py-24 text-muted-foreground bg-secondary/20 rounded-xl border border-border">
+                <p className="text-xl font-bold">No stories match your filters</p>
+                <button onClick={() => { setBiasFilter(null); setCategoryId(null); setSearchQuery(""); }} className="text-sm text-primary mt-3 hover:underline">
                   Clear filters
                 </button>
               </div>
             ) : (
-              <div className="space-y-5">
-                {/* Hero row */}
+              <div className="space-y-8">
+                {/* 1. Ultra Dense Hero Grid (1 Featured + 4 Side Lists) */}
                 {featured && (
-                  <div className="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-4">
                     <StoryCard article={featured} variant="featured" bookmarkedIds={bookmarkedIds} />
-                    <div className="flex flex-col gap-4">
-                      {secondRow.slice(0, 2).map((a) => (
-                        <StoryCard key={a.id} article={a} variant="standard" bookmarkedIds={bookmarkedIds} />
+                    <div className="flex flex-col border border-border rounded-lg bg-card overflow-hidden">
+                      <div className="bg-secondary/40 px-4 py-2.5 border-b border-border text-xs font-black uppercase tracking-widest text-muted-foreground">
+                        Top Coverage
+                      </div>
+                      <div className="flex flex-col flex-1">
+                        {sideList.map((a) => (
+                           <StoryCard key={a.id} article={a} variant="dense" bookmarkedIds={bookmarkedIds} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Sliding Window (Carousel) */}
+                {slideWindow.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 py-1">
+                      <h2 className="text-xs font-black uppercase tracking-widest text-foreground whitespace-nowrap">Trending Now</h2>
+                      <div className="flex-1 h-px bg-border text-gradient-to-r" />
+                    </div>
+                    <div className="overflow-hidden" ref={emblaRef}>
+                      <div className="flex gap-4">
+                        {slideWindow.map((a) => (
+                          <StoryCard key={a.id} article={a} variant="slide" bookmarkedIds={bookmarkedIds} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Denser Grid (Compact variants) */}
+                {denseGrid.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 py-1">
+                      <h2 className="text-xs font-black uppercase tracking-widest text-foreground whitespace-nowrap">For You</h2>
+                      <div className="flex-1 h-px bg-border" />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {denseGrid.map((a) => (
+                        <div key={a.id} className="bg-card border border-border rounded p-3 hover:border-primary/50 transition-colors">
+                          <StoryCard article={a} variant="compact" bookmarkedIds={bookmarkedIds} />
+                        </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Divider */}
-                {mainGrid.length > 0 && (
-                  <div className="flex items-center gap-3 py-1">
-                    <h2 className="text-xs font-black uppercase tracking-widest text-muted-foreground whitespace-nowrap">Latest Stories</h2>
-                    <div className="flex-1 h-px bg-border" />
+                {/* 4. Table Format (Ultra Dense) */}
+                {tableRows.length > 0 && (
+                  <div className="space-y-3 pt-4">
+                    <div className="flex items-center gap-3 py-1">
+                      <h2 className="text-xs font-black uppercase tracking-widest text-foreground whitespace-nowrap">News Index</h2>
+                      <div className="flex-1 h-px bg-border" />
+                    </div>
+                    <div className="border border-border rounded bg-card overflow-hidden overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead className="bg-secondary/40 border-b border-border">
+                          <tr>
+                            <th className="py-2 px-3 text-[10px] font-black uppercase tracking-widest text-muted-foreground">Story</th>
+                            <th className="py-2 px-3 text-[10px] font-black uppercase tracking-widest text-muted-foreground">Primary Source</th>
+                            <th className="py-2 px-3 text-[10px] font-black uppercase tracking-widest text-muted-foreground w-28">Bias</th>
+                            <th className="py-2 px-3 text-[10px] font-black uppercase tracking-widest text-muted-foreground text-right">Coverage</th>
+                            <th className="py-2 px-3 text-[10px] font-black uppercase tracking-widest text-muted-foreground text-right hidden sm:table-cell">Time</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tableRows.map((a) => (
+                             <StoryCard key={a.id} article={a} variant="table-row" bookmarkedIds={bookmarkedIds} />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
 
-                {/* Main grid */}
-                {mainGrid.length > 0 && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {mainGrid.map((a) => (
-                      <StoryCard key={a.id} article={a} variant="standard" bookmarkedIds={bookmarkedIds} />
-                    ))}
-                  </div>
-                )}
               </div>
             )}
           </main>

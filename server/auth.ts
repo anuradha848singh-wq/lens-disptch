@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { storage } from "./storage";
 import type { Request, Response, NextFunction } from "express";
 import { randomBytes } from "crypto";

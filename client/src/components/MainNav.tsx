@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Search, Moon, Sun, X, LayoutDashboard, LogOut, ShieldCheck, ChevronDown, Bell, Globe } from "lucide-react";
+import { Search, Moon, Sun, X, LayoutDashboard, LogOut, ShieldCheck, ChevronDown, Bell, Globe, Settings } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "@/lib/auth-context";
 import { AuthModal } from "./AuthModal";
@@ -27,8 +27,10 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
   const tabs = [
     { label: "Home", href: "/" },
     { label: "For You", href: "/for-you" },
-    { label: "Local", href: "/local" },
     { label: "Blindspot", href: "/blindspot" },
+    { label: "My Bias", href: "/my-bias" },
+    { label: "History", href: "/history" },
+    { label: "Publishers", href: "/publishers" },
   ];
 
   return (
@@ -157,6 +159,10 @@ export function MainNav({ onSearch, searchQuery }: MainNavProps) {
                         <Link href="/admin"><span className="flex items-center gap-2 w-full cursor-pointer"><ShieldCheck className="w-4 h-4" />Admin Dashboard</span></Link>
                       </DropdownMenuItem>
                     )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild>
+                      <Link href="/settings"><span className="flex items-center gap-2 w-full cursor-pointer"><Settings className="w-4 h-4" />Settings</span></Link>
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={logout} className="text-destructive">
                       <LogOut className="w-4 h-4 mr-2" />Sign Out
