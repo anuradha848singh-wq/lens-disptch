@@ -13,7 +13,9 @@ interface Article {
   title: string;
   excerpt: string;
   imageUrl: string;
-  publisher: {
+  domain?: string;
+  visibilityState?: string;
+  publisher?: {
     name: string;
     logo?: string;
   };
@@ -61,7 +63,10 @@ export function ArticleCard({ article, variant = "standard", onClick }: ArticleC
             <p className="text-lg mb-4 line-clamp-2 text-white/90">{article.excerpt}</p>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <PublisherBadge name={article.publisher.name} logo={article.publisher.logo} />
+                <PublisherBadge 
+                  name={article.publisher?.name || article.domain || "Unknown"} 
+                  logo={article.publisher?.logo} 
+                />
                 <span className="text-sm text-white/80">
                   {formatDistanceToNow(article.publishedAt, { addSuffix: true })}
                 </span>
@@ -101,7 +106,7 @@ export function ArticleCard({ article, variant = "standard", onClick }: ArticleC
               </div>
               <h3 className="font-semibold text-base line-clamp-2 mb-2">{article.title}</h3>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span className="font-medium">{article.publisher.name}</span>
+                <span className="font-medium">{article.publisher?.name || article.domain || "Unknown"}</span>
                 <span>•</span>
                 <span>{formatDistanceToNow(article.publishedAt, { addSuffix: true })}</span>
               </div>
@@ -114,7 +119,7 @@ export function ArticleCard({ article, variant = "standard", onClick }: ArticleC
 
   return (
     <Card
-      className="cursor-pointer overflow-hidden hover-elevate active-elevate-2 transition-all border-card-border"
+      className={`cursor-pointer overflow-hidden hover-elevate active-elevate-2 transition-all border-card-border ${article.visibilityState === 'low_priority' ? 'opacity-70 grayscale-[0.3]' : ''}`}
       onClick={onClick}
       data-testid={`card-article-${article.id}`}
     >
@@ -134,7 +139,11 @@ export function ArticleCard({ article, variant = "standard", onClick }: ArticleC
         <p className="text-sm text-muted-foreground line-clamp-2 mb-4">{article.excerpt}</p>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <PublisherBadge name={article.publisher.name} logo={article.publisher.logo} size="sm" />
+            <PublisherBadge 
+              name={article.publisher?.name || article.domain || "Unknown"} 
+              logo={article.publisher?.logo} 
+              size="sm" 
+            />
             <span>•</span>
             <span>{formatDistanceToNow(article.publishedAt, { addSuffix: true })}</span>
           </div>

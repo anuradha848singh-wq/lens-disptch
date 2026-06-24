@@ -8,11 +8,98 @@ import path from "path";
 import fs from "fs/promises";
 import { 
   insertUserSchema, insertUserProfileSchema, insertPublisherSchema,
-  insertCategorySchema, insertTagSchema, insertArticleSchema,
-  insertSystemSettingsSchema
-} from "@shared/schema";
+  insertCategorySchema, insertClusterSchema, insertArticleSchema,
+  insertTagSchema, insertSystemSettingsSchema,
+  type Category, type Publisher, type Cluster, type Article
+} from "../shared/schema";
 import { fetchFullContent } from "./article-scraper";
 import { findSourcesForArticle } from "./topic-search";
+import { getAdminFetcherStatus, updateAdminFetcherConfig, addCustomSource, fetchRealNews } from "./news-fetcher";
+import { metrics, resolveError, recordApiCall, getQueueDepth } from "./metrics";
+import { connection } from "./queue";
+import { db } from "./db";
+import { articles, publishers, clusters, homepageCache, userPreferences, articleCategories, categories, articleTags, tags } from "../shared/schema";
+import { eq, inArray, sql, and, desc, gte } from "drizzle-orm";
+import rateLimit from "express-rate-limit";
+import { cache, CACHE_KEYS } from "./cache";
+import { z } from "zod";
+import { fromZodError } from "zod-validation-error";
+import type { AuthenticatedRequest, OptionalAuthRequest } from "./types";
+import { authRouter } from "./routes/auth.routes";
+import { articleRouter } from "./routes/article.routes";
+import { publisherRouter } from "./routes/publisher.routes";
+import { clusterRouter } from "./routes/cluster.routes";
+import { analyticsRouter } from "./routes/analytics.routes";
+import { socialRouter } from "./routes/social.routes";
+import { ogRouter } from "./routes/og.routes";
+import { queryLogs, generateDiagnosis, exportCurrentSession, getLogFilesSummary, logClientError } from "./logger";
+import type { LogLevel, LogSource } from "./logger";
+
+/** Sanitize user input for SQL LIKE patterns to prevent wildcard injection */
+function sanitizeLikeInput(input: string): string {
+  return input.replace(/[%_\\]/g, "\\$&");
+}
+
+/** Safely exclude passwordHash from user object */
+function sanitizeUser(user: any) {
+  const { passwordHash, ...safe } = user;
+  return safe;
+}
+
+const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+});
+
+const registerSchema = loginSchema.extend({
+  displayName: z.string().min(2, "Display name must be at least 2 characters"),
+});
+
+export function deriveBiasLabel(
+  biasScore: number | null | undefined,
+  publisherBiasRating: string | null | undefined
+): "pro_opposition" | "neutral" | "pro_establishment" | null {
+  // Prefer the string rating from the publisher (more accurate)
+  if (publisherBiasRating) {
+    const r = publisherBiasRating.toLowerCase();
+    if (r.includes("pro_opposition"))  return "pro_opposition";
+    if (r.includes("pro_establishment")) return "pro_establishment";
+    if (r.includes("neutral")) return "neutral";
+  }
+  // Fall back to numeric score
+  if (biasScore != null) {
+    const s = Number(biasScore);
+    if (s < -15) return "pro_opposition";
+    if (s >  15) return "pro_establishment";
+    return "neutral";
+  }
+  return null;
+}
+
+
+function formatUptime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  return `${m}m ${s % 60}s`;
+}
+
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests." }
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many login attempts." }
+});
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -39,126 +126,86 @@ const upload = multer({
   }
 });
 
+// Public API middleware for caching
+const publicCache = (res: any, ttl = 300) => {
+  res.setHeader("Cache-Control", `public, s-maxage=${ttl}, stale-while-revalidate=${Math.round(ttl / 5)}`);
+};
+
 export async function registerRoutes(app: Express): Promise<Server> {
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.get("/api/health", async (req, res) => {
+    const health: Record<string, "ok" | "degraded" | "down"> = {
+      db: "down",
+      redis: "down",
+      groq: process.env.GROQ_API_KEY ? "ok" : "down",
+      jina: process.env.JINA_API_KEY ? "ok" : "down",
+    };
+
+    try {
+      await db.execute(sql`SELECT 1`);
+      health.db = "ok";
+    } catch (err: any) {
+      console.error("[HealthCheck] DB health check failed:", err.message);
+      health.db = "down";
+    }
+
+    let queueDepth: any = null;
+    try {
+      const { connection } = await import("./queue");
+      await connection.ping();
+      health.redis = "ok";
+      queueDepth = await getQueueDepth();
+    } catch (err: any) {
+      console.error("[HealthCheck] Redis/Queue health check failed:", err.message);
+      health.redis = "down";
+    }
+
+    try {
+      const { isCircuitOpen } = await import("./lib/embeddings-client");
+      if (isCircuitOpen()) {
+        health.jina = "degraded";
+      }
+    } catch (e) {}
+
+    const allOk = Object.values(health).every(v => v === "ok");
+    const anyDown = Object.values(health).some(v => v === "down");
+
+    res.status(anyDown ? 503 : 200).json({
+      status: allOk ? "ok" : "degraded",
+      timestamp: new Date().toISOString(),
+      services: health,
+      metrics: {
+        queueDepth
+      }
+    });
+  });
+  
+  // Note: express.json() and express.urlencoded() are already registered in index.ts
   app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+  app.use('/api/', generalLimiter);
+  app.use('/api/auth/login', authLimiter);
+  app.use('/api/auth/register', authLimiter);
+
+  // API metrics middleware — records every call automatically
+  app.use('/api/', (req: any, res: any, next: any) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      recordApiCall({
+        endpoint: req.path,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - start,
+      });
+    });
+    next();
+  });
 
   // ==================== AUTH ====================
-
-  app.post("/api/auth/register", async (req, res) => {
-    try {
-      const { email, password, displayName } = req.body;
-
-      if (!email || !password || !displayName) {
-        return res.status(400).json({ error: "Email, password, and display name are required" });
-      }
-
-      const existing = await storage.getUserByEmail(email);
-      if (existing) {
-        return res.status(400).json({ error: "Email already registered" });
-      }
-
-      const passwordHash = await hashPassword(password);
-      const { user, profile } = await storage.createUser(
-        { email, passwordHash, role: "editor", status: "active" },
-        { userId: "", displayName, avatarUrl: null, bio: null }
-      );
-
-      const token = await generateSessionToken();
-      const tokenHash = await hashPassword(token);
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-      const session = await storage.createSession({
-        userId: user.id,
-        refreshTokenHash: tokenHash,
-        expiresAt,
-        userAgent: req.headers['user-agent'] || null,
-        ipAddress: req.ip || null,
-      });
-
-      res.cookie('session_id', session.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      res.json({ user: { ...user, passwordHash: undefined }, profile });
-    } catch (error) {
-      console.error("Registration error:", error);
-      res.status(500).json({ error: "Registration failed" });
-    }
-  });
-
-  app.post("/api/auth/login", async (req, res) => {
-    try {
-      const { email, password } = req.body;
-
-      if (!email || !password) {
-        return res.status(400).json({ error: "Email and password are required" });
-      }
-
-      const user = await storage.getUserByEmail(email);
-      if (!user) {
-        return res.status(401).json({ error: "Invalid credentials" });
-      }
-
-      const valid = await verifyPassword(password, user.passwordHash);
-      if (!valid) {
-        return res.status(401).json({ error: "Invalid credentials" });
-      }
-
-      if (user.status !== "active") {
-        return res.status(403).json({ error: "Account is not active" });
-      }
-
-      const token = await generateSessionToken();
-      const tokenHash = await hashPassword(token);
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-      const session = await storage.createSession({
-        userId: user.id,
-        refreshTokenHash: tokenHash,
-        expiresAt,
-        userAgent: req.headers['user-agent'] || null,
-        ipAddress: req.ip || null,
-      });
-
-      res.cookie('session_id', session.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      const profile = await storage.getUserProfile(user.id);
-      res.json({ user: { ...user, passwordHash: undefined }, profile });
-    } catch (error) {
-      console.error("Login error:", error);
-      res.status(500).json({ error: "Login failed" });
-    }
-  });
-
-  app.post("/api/auth/logout", authenticateUser, async (req, res) => {
-    try {
-      const sessionId = (req as any).sessionId;
-      if (sessionId) {
-        await storage.deleteSession(sessionId);
-      }
-      res.clearCookie('session_id');
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Logout error:", error);
-      res.status(500).json({ error: "Logout failed" });
-    }
-  });
+  app.use("/api/auth", authRouter);
 
   app.get("/api/auth/me", authenticateUser, async (req, res) => {
     try {
       const user = (req as any).user;
       const profile = await storage.getUserProfile(user.id);
-      res.json({ user: { ...user, passwordHash: undefined }, profile });
+      res.json({ user: sanitizeUser(user), profile });
     } catch (error) {
       console.error("Get user error:", error);
       res.status(500).json({ error: "Failed to get user" });
@@ -166,67 +213,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==================== PUBLISHERS ====================
-
-  app.get("/api/publishers", async (req, res) => {
-    try {
-      const publishers = await storage.listPublishers();
-      res.json(publishers);
-    } catch (error) {
-      console.error("List publishers error:", error);
-      res.status(500).json({ error: "Failed to list publishers" });
-    }
-  });
-
-  app.get("/api/publishers/:id", async (req, res) => {
-    try {
-      const publisher = await storage.getPublisher(req.params.id);
-      if (!publisher) {
-        return res.status(404).json({ error: "Publisher not found" });
-      }
-      res.json(publisher);
-    } catch (error) {
-      console.error("Get publisher error:", error);
-      res.status(500).json({ error: "Failed to get publisher" });
-    }
-  });
-
-  app.post("/api/publishers", authenticateUser, requireRole("admin"), async (req, res) => {
-    try {
-      const data = insertPublisherSchema.parse(req.body);
-      const publisher = await storage.createPublisher(data);
-      res.status(201).json(publisher);
-    } catch (error: any) {
-      console.error("Create publisher error:", error);
-      res.status(400).json({ error: error.message || "Failed to create publisher" });
-    }
-  });
-
-  app.patch("/api/publishers/:id", authenticateUser, requireRole("admin"), async (req, res) => {
-    try {
-      const publisher = await storage.updatePublisher(req.params.id, req.body);
-      res.json(publisher);
-    } catch (error: any) {
-      console.error("Update publisher error:", error);
-      res.status(400).json({ error: error.message || "Failed to update publisher" });
-    }
-  });
-
-  app.delete("/api/publishers/:id", authenticateUser, requireRole("admin"), async (req, res) => {
-    try {
-      await storage.deletePublisher(req.params.id);
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("Delete publisher error:", error);
-      res.status(400).json({ error: error.message || "Failed to delete publisher" });
-    }
-  });
+  app.use("/api/publishers", publisherRouter);
 
   // ==================== CATEGORIES & TAGS ====================
 
   app.get("/api/categories", async (req, res) => {
     try {
-      const categories = await storage.listCategories();
-      res.json(categories);
+      const cats = await storage.listCategories();
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.json(cats);
     } catch (error) {
       console.error("List categories error:", error);
       res.status(500).json({ error: "Failed to list categories" });
@@ -247,6 +242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/tags", async (req, res) => {
     try {
       const tags = await storage.listTags();
+      res.setHeader("Cache-Control", "public, max-age=3600");
       res.json(tags);
     } catch (error) {
       console.error("List tags error:", error);
@@ -265,10 +261,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── High-Fidelity Engagement Signals ───────────────────────────────────────
+
+  /**
+   * Returns top 10 trending clusters from the last 12 hours with at least 3 sources.
+   * Sorted by importanceScore.
+   */
+  app.get("/api/trending", optionalAuth, async (req, res) => {
+    try {
+      const window = new Date(Date.now() - 12 * 60 * 60 * 1000);
+      
+      // Get trending clusters with their most important article
+      const data = await storage.getHomepageClusters(10);
+      const filtered = data.filter((c: any) => 
+        c.sourceCount >= 3 && new Date(c.lastUpdatedAt) >= window
+      ).sort((a: any, b: any) => (b.importanceScore || 0) - (a.importanceScore || 0));
+      
+      publicCache(res);
+      res.json(filtered);
+    } catch (error) {
+      console.error("Trending API error:", error);
+      res.status(500).json({ error: "Failed to fetch trending stories" });
+    }
+  });
+
+  app.get("/api/blindspots", optionalAuth, async (req, res) => {
+    try {
+      const window = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      
+      // Get clusters with article data
+      const data = await storage.getHomepageClusters(100);
+      
+      const blindspots = data.filter((c: any) => {
+        if (new Date(c.lastUpdatedAt) < window) return false;
+        if (c.sourceCount < 4) return false;
+
+        const left = c.proEstablishmentCount || 0;
+        const right = c.proOppositionCount || 0;
+        
+        if (left === 0 && right >= 4) return true;
+        if (right === 0 && left >= 4) return true;
+        if (left > 0 && right > 0) {
+          return (left / right >= 5) || (right / left >= 5);
+        }
+        return false;
+      }).sort((a: any, b: any) => (b.importanceScore || 0) - (a.importanceScore || 0));
+
+      publicCache(res);
+      res.json(blindspots.slice(0, 20));
+    } catch (error) {
+      console.error("Blindspots API error:", error);
+      res.status(500).json({ error: "Failed to fetch blindspots" });
+    }
+  });
+
+  // ==================== ANALYTICS ====================
+  app.use("/api/analytics", analyticsRouter);
+
+  // Cluster impact and publisher radar routes are in cluster.routes.ts and publisher.routes.ts
+
+  // Publisher fingerprint route is in publisher.routes.ts
+  // Analytics droughts route is in analytics.routes.ts
+
+
+
+
   // ==================== ARTICLES ====================
 
   // IMPORTANT: /api/articles/trending and /api/articles/for-you MUST be before /api/articles/:id
-  app.get("/api/force-fetch", async (req, res) => {
+  app.get("/api/force-fetch", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { fetchRealNews } = await import("./news-fetcher");
       const count = await fetchRealNews();
@@ -278,132 +339,245 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/articles/trending", async (req, res) => {
+  app.get("/api/homepage", optionalAuth, async (req, res) => {
     try {
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
-      const articles = await storage.getTrendingArticles(limit);
-      res.json(articles);
-    } catch (error) {
-      console.error("Trending articles error:", error);
-      res.status(500).json({ error: "Failed to get trending articles" });
-    }
-  });
-
-  app.get("/api/articles/for-you", authenticateUser, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-      const articles = await storage.getForYouArticles(user.id, limit);
-      res.json(articles);
-    } catch (error) {
-      console.error("For-you articles error:", error);
-      res.status(500).json({ error: "Failed to get personalized articles" });
-    }
-  });
-
-  app.get("/api/articles", optionalAuth, async (req, res) => {
-    try {
-      const { status, category, bias, search, limit, offset } = req.query;
-      const user = (req as any).user;
+      const categoryId = (req.query.categoryId as string) || null;
+      const search = (req.query.search as string) || null;
+      const category = categoryId || (req.query.category as string) || "all";
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
       
-      const params: any = {
-        limit: limit ? parseInt(limit as string) : 20,
-        offset: offset ? parseInt(offset as string) : 0,
-      };
+      let data: any[] = [];
+      let source = "live_query";
 
-      if (status && !user) {
-        params.status = "published";
-      } else if (status) {
-        params.status = status as any;
-      } else if (!user || user.role !== "admin") {
-        params.status = "published";
+      // Attempt to serve from materialized homepageCache table (Zero-CPU) for first page
+      if (offset === 0 && !search && (!category || category === "all")) {
+        try {
+          const [cacheRow] = await db.select()
+            .from(homepageCache)
+            .where(eq(homepageCache.categorySlug, category))
+            .limit(1);
+
+          if (cacheRow && cacheRow.data && Array.isArray(cacheRow.data) && (cacheRow.data as any[]).length > 0) {
+            data = (cacheRow.data as any[]).slice(0, limit);
+            source = "materialized_cache";
+          }
+        } catch (e) {
+          // DB cache table might not exist yet — that's okay
+        }
       }
 
-      if (category) params.categoryId = category as string;
-      if (bias) params.bias = bias as any;
-      if (search) params.search = search as string;
+      // ALWAYS fall back to live computation if cache is empty or we're paginating past cache
+      if (data.length === 0) {
+        data = await storage.getHomepageClusters(limit, offset, search, category);
+        source = "live_query";
+      }
 
-      const result = await storage.listArticles(params);
-      res.json(result);
+      // PERSONALIZATION: If logged in, boost followed categories/topics
+      const user = (req as any).user;
+      if (user && offset === 0) { // Only personalize the first page to avoid weird shifting on pagination
+        try {
+          const [prefs] = await db.select().from(userPreferences).where(eq(userPreferences.userId, user.id)).limit(1);
+          if (prefs) {
+            const { followedCategories = [], followedTopics = [] } = prefs;
+            if (followedCategories.length > 0 || followedTopics.length > 0) {
+              data = [...data].sort((a: any, b: any) => {
+                const aBoost = followedCategories.includes(a.category) || (a.topic && followedTopics.includes(a.topic)) ? 1 : 0;
+                const bBoost = followedCategories.includes(b.category) || (b.topic && followedTopics.includes(b.topic)) ? 1 : 0;
+                if (aBoost !== bBoost) return bBoost - aBoost;
+                return (b.importanceScore || 0) - (a.importanceScore || 0);
+              });
+            }
+          }
+        } catch (e) { /* user prefs optional */ }
+      }
+
+      // No hydration needed: the preprocessor (updateHomepageCache) already 
+      // builds 'publisherNames' so the API can serve this block instantly.
+
+      publicCache(res);
+      res.json(data);
     } catch (error) {
-      console.error("List articles error:", error);
-      res.status(500).json({ error: "Failed to list articles" });
+      console.error("Homepage clusters error:", error);
+      res.status(500).json({ error: "Failed to get homepage clusters" });
     }
   });
 
-  app.get("/api/articles/:id/full-content", optionalAuth, async (req, res) => {
+  app.get("/api/homepage/lean", async (req, res) => {
+    try {
+      const data = await cache.fetch("homepage:lean:v1", async () => {
+        const result = await db.execute(sql`
+          SELECT
+            COUNT(*) FILTER (WHERE p.bias_rating::text LIKE '%left%')   AS pro_establishment_count,
+            COUNT(*) FILTER (WHERE p.bias_rating::text LIKE '%center%') AS neutral_count,
+            COUNT(*) FILTER (WHERE p.bias_rating::text LIKE '%right%')  AS pro_opposition_count
+          FROM ${articles} a
+          INNER JOIN ${publishers} p ON a.source_id = p.id
+          WHERE a.published_at > NOW() - INTERVAL '24 hours'
+            AND a.status = 'published'
+        `);
+        const { pro_establishment_count: l, neutral_count: c, pro_opposition_count: r } = result.rows[0] as any;
+        const total = Number(l) + Number(c) + Number(r) || 1;
+        return {
+          leftPct:   Math.round(Number(l)/total*100),
+          centerPct: Math.round(Number(c)/total*100),
+          rightPct:  Math.round((total-Number(l)-Number(c))/total*100),
+        };
+      }, 300);
+      publicCache(res, 300);
+      res.json(data);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch lean" });
+    }
+  });
+
+  app.get("/api/articles/polarizing", async (req, res) => {
+    try {
+      const data = await cache.fetch("articles:polarizing:v1", async () => {
+        const result = await db.execute(sql`
+          SELECT id, headline, source_count as "sourceCount", pro_establishment_count as "proEstablishmentCount",
+                 neutral_count as "neutralCount", pro_opposition_count as "proOppositionCount", importance_score as "importanceScore",
+                 category_slug as "categorySlug", last_updated_at as "lastUpdatedAt"
+          FROM ${clusters}
+          WHERE pro_establishment_count >= 2
+            AND pro_opposition_count >= 2
+            AND source_count >= 2
+            AND last_updated_at > NOW() - INTERVAL '48 hours'
+          ORDER BY (pro_establishment_count + pro_opposition_count) DESC,
+                   ABS(pro_establishment_count - pro_opposition_count) DESC
+          LIMIT 1
+        `);
+        return result.rows[0] || null;
+      }, 600);
+      publicCache(res, 600);
+      res.json(data);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch polarizing" });
+    }
+  });
+
+  app.get("/api/system/stats", async (req, res) => {
+    try {
+      const data = await cache.fetch("system:stats:v1", async () => {
+        const result = await db.execute(sql`
+          SELECT
+            (SELECT COUNT(*) FROM ${publishers} WHERE active = true) AS "totalPublishers",
+            (SELECT COUNT(DISTINCT country) FROM ${publishers} WHERE country IS NOT NULL) AS "totalCountries",
+            (SELECT COUNT(*) FROM ${articles} WHERE status = 'published') AS "totalArticles",
+            (SELECT COUNT(*) FROM ${clusters} WHERE source_count >= 1) AS "totalClusters",
+            (SELECT COUNT(*) FROM ${articles} WHERE status = 'published') AS "totalBiasEvents"
+        `);
+        return result.rows[0];
+      }, 3600);
+      publicCache(res, 3600);
+      res.json(data);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
+  app.get("/api/tags/trending", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 8;
+      const data = await cache.fetch(`tags:trending:${limit}`, async () => {
+        const result = await db.execute(sql`
+          SELECT t.name, t.slug, COUNT(at.article_id) AS freq
+          FROM ${articleTags} at
+          JOIN ${tags} t ON t.id = at.tag_id
+          JOIN ${articles} a ON a.id = at.article_id
+          WHERE a.published_at > NOW() - INTERVAL '48 hours'
+            AND a.status = 'published'
+          GROUP BY t.name, t.slug
+          ORDER BY freq DESC
+          LIMIT ${limit}
+        `);
+        return result.rows.map((r: any) => ({
+          id: r.slug,
+          name: r.name,
+          slug: r.slug,
+          mentions: Number(r.freq),
+        }));
+      }, 600);
+      publicCache(res, 600);
+      res.json(data);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch trending tags" });
+    }
+  });
+
+  // Mount modular article router (handles trending, for-you, CRUD, related, similar, full-content, share)
+  app.use("/api/articles", articleRouter);
+
+  // ── Topic-Based Source Discovery ──
+  app.get("/api/sources/:id", async (req, res) => {
     try {
       const article = await storage.getArticle(req.params.id);
-      if (!article) return res.status(404).json({ error: "Article not found" });
-
-      if (article.fullContent) {
-        return res.json({ fullContent: article.fullContent });
+      if (!article || !article.clusterId) {
+        return res.json({ left: 0, center: 0, right: 0, total: 0, sources: [] });
       }
-
-      if (!article.sourceUrl) {
-        return res.status(400).json({ error: "No source URL available for scraping" });
-      }
-
-      console.log(`[scraper] Fetching full content for: ${article.sourceUrl}`);
-      const scraped = await fetchFullContent(article.sourceUrl);
       
-      if (scraped && scraped.bodyHtml) {
-        await storage.updateArticleContent(article.id, scraped.bodyHtml);
-        // Also update the 'fullContent' field specifically if we want to separate it
-        // For now, I'll update the main bodyHtml and also return it
-        res.json({ fullContent: scraped.bodyHtml });
-      } else {
-        res.status(500).json({ error: "Failed to extract content from source" });
-      }
-    } catch (error) {
-      console.error("Scrape error:", error);
-      res.status(500).json({ error: "Scraping failed" });
+      const clusterArticles = await db
+      .select({
+        id: articles.id,
+        title: articles.title,
+        url: articles.url,
+        publishedAt: articles.publishedAt,
+        heroImageUrl: articles.heroImageUrl,
+        sourceName: sql<string>`COALESCE(${publishers.name}, 
+          REGEXP_REPLACE(${articles.url}, 'https?://(www\\.)?([^/]+).*', '\\2'),
+          'Unknown Publisher')`,
+        sourceUrl: publishers.website,
+        bias: publishers.biasRating,
+      })
+      .from(articles)
+      .leftJoin(publishers, eq(publishers.id, articles.sourceId))
+      .where(
+        and(
+          eq(articles.clusterId, article.clusterId),
+          eq(articles.status, 'published')
+        )
+      )
+      .orderBy(desc(articles.publishedAt))
+      .limit(20);
+
+    const left = clusterArticles.filter((a: any) => {
+      const b = (a.bias || '').toLowerCase();
+      return b.includes('pro_opposition') && !b.includes('pro_establishment');
+    }).length;
+
+    const right = clusterArticles.filter((a: any) => {
+      const b = (a.bias || '').toLowerCase();
+      return b.includes('pro_establishment') && !b.includes('pro_opposition');
+    }).length;
+
+    const center = clusterArticles.filter((a: any) => {
+      const b = (a.bias || '').toLowerCase();
+      return b === 'neutral' || b.includes('neutral') || 
+             (!b.includes('pro_opposition') && !b.includes('pro_establishment') && b !== '');
+    }).length;
+
+    const clusterData = await db.select()
+      .from(clusters)
+      .where(eq(clusters.id, article.clusterId))
+      .limit(1);
+
+    return res.json({
+      left: clusterData[0]?.proEstablishmentCount || left,
+      center: clusterData[0]?.neutralCount || center,
+      right: clusterData[0]?.proOppositionCount || right,
+      total: clusterArticles.length,
+      sources: clusterArticles,
+    });
+  } catch (err) {
+      console.error('Sources error:', err);
+      res.status(500).json({ left: 0, center: 0, right: 0, total: 0, sources: [] });
     }
   });
 
-  app.get("/api/articles/:id", optionalAuth, async (req, res) => {
-    try {
-      const article = await storage.getArticle(req.params.id);
-      if (!article) {
-        return res.status(404).json({ error: "Article not found" });
-      }
-
-      const user = (req as any).user;
-      if (article.status !== "published" && (!user || (user.id !== article.authorId && user.role !== "admin"))) {
-        return res.status(404).json({ error: "Article not found" });
-      }
-
-      // Track view
-      await storage.trackArticleView({
-        articleId: article.id,
-        viewerId: user?.id || null,
-        referrer: req.headers.referer || null,
-        metadata: null,
-      });
-
-      // Track reading history for logged-in users
-      if (user) {
-        await storage.trackReadingHistory(user.id, article.id);
-      }
-
-      res.json(article);
-    } catch (error) {
-      console.error("Get article error:", error);
-      res.status(500).json({ error: "Failed to get article" });
-    }
-  });
-
-  app.get("/api/articles/:id/related", optionalAuth, async (req, res) => {
-    try {
-      const related = await storage.getRelatedArticles(req.params.id);
-      res.json(related);
-    } catch (error) {
-      console.error("Get related articles error:", error);
-      res.status(500).json({ error: "Failed to get related articles" });
-    }
-  });
-
-  // ── Topic-Based Source Discovery (the Ground News killer feature) ──
   app.get("/api/sources", optionalAuth, async (req, res) => {
     try {
       const articleId = req.query.articleId as string;
@@ -421,87 +595,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/articles", authenticateUser, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const { categoryIds = [], tagIds = [], ...articleData } = req.body;
-      
-      const data = insertArticleSchema.parse({
-        ...articleData,
-        authorId: user.id,
-      });
+  // ==================== CLUSTERS ====================
+  app.use("/api/clusters", clusterRouter);
+  app.use("/api/social", socialRouter);
+  app.use("/api/og", ogRouter);
 
-      const article = await storage.createArticle(data, categoryIds, tagIds);
-      res.status(201).json(article);
-    } catch (error: any) {
-      console.error("Create article error:", error);
-      res.status(400).json({ error: error.message || "Failed to create article" });
-    }
-  });
-
-  app.patch("/api/articles/:id", authenticateUser, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const article = await storage.getArticle(req.params.id);
-      
-      if (!article) {
-        return res.status(404).json({ error: "Article not found" });
-      }
-
-      if (user.role !== "admin" && article.authorId !== user.id) {
-        return res.status(403).json({ error: "Not authorized to edit this article" });
-      }
-
-      const { categoryIds, tagIds, ...updateData } = req.body;
-      const updated = await storage.updateArticle(req.params.id, updateData, categoryIds, tagIds);
-      res.json(updated);
-    } catch (error: any) {
-      console.error("Update article error:", error);
-      res.status(400).json({ error: error.message || "Failed to update article" });
-    }
-  });
-
-  app.post("/api/articles/:id/publish", authenticateUser, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const article = await storage.getArticle(req.params.id);
-      
-      if (!article) {
-        return res.status(404).json({ error: "Article not found" });
-      }
-
-      if (user.role !== "admin" && article.authorId !== user.id) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
-
-      const published = await storage.publishArticle(req.params.id);
-      res.json(published);
-    } catch (error: any) {
-      console.error("Publish article error:", error);
-      res.status(400).json({ error: error.message || "Failed to publish article" });
-    }
-  });
-
-  app.delete("/api/articles/:id", authenticateUser, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const article = await storage.getArticle(req.params.id);
-      
-      if (!article) {
-        return res.status(404).json({ error: "Article not found" });
-      }
-
-      if (user.role !== "admin" && article.authorId !== user.id) {
-        return res.status(403).json({ error: "Not authorized to delete this article" });
-      }
-
-      await storage.deleteArticle(req.params.id);
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("Delete article error:", error);
-      res.status(400).json({ error: error.message || "Failed to delete article" });
-    }
-  });
 
   // ==================== BOOKMARKS ====================
 
@@ -572,16 +670,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ==================== GROUND NEWS FEATURES ====================
+  // ==================== THE LENS DISPATCH FEATURES ====================
 
   // Blindspot
   app.get("/api/blindspot", async (req, res) => {
     try {
       const result = await storage.getBlindspotArticles();
+      publicCache(res);
       res.json(result);
     } catch (error) {
       console.error("Blindspot error:", error);
       res.status(500).json({ error: "Failed to get blindspot articles" });
+    }
+  });
+
+  // ==================== ADMIN PANEL ====================
+  app.get("/api/admin/fetcher", authenticateUser, requireRole("admin"), (req, res) => {
+    try {
+      res.json(getAdminFetcherStatus());
+    } catch (error) {
+      console.error("Admin Fetch Status error:", error);
+      res.status(500).json({ error: "Failed to get fetcher status" });
+    }
+  });
+
+  app.post("/api/admin/fetcher", authenticateUser, requireRole("admin"), (req, res) => {
+    try {
+      const config = req.body;
+      const updated = updateAdminFetcherConfig(config);
+      res.json(updated);
+    } catch (error) {
+      console.error("Admin Update Fetcher error:", error);
+      res.status(500).json({ error: "Failed to update fetcher config" });
+    }
+  });
+
+  app.post("/api/admin/source", authenticateUser, requireRole("admin"), (req, res) => {
+    try {
+      const source = req.body;
+      addCustomSource(source);
+      res.json({ success: true, status: getAdminFetcherStatus() });
+    } catch (error) {
+      console.error("Admin Add Source error:", error);
+      res.status(500).json({ error: "Failed to add new RSS source" });
     }
   });
 
@@ -606,22 +737,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(history);
     } catch (error) {
       console.error("History error:", error);
-      res.status(500).json({ error: "Failed to get reading history" });
+      res.status(500).json({ error: "Failed to get history" });
     }
   });
 
-  // Share tracking
-  app.post("/api/articles/:id/share", optionalAuth, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const { platform = "copy" } = req.body;
-      const event = await storage.trackShare(req.params.id, user?.id || null, platform);
-      res.json(event);
-    } catch (error) {
-      console.error("Share tracking error:", error);
-      res.status(500).json({ error: "Failed to track share" });
-    }
-  });
+  // Note: /api/articles/:id/share is handled by articleRouter (article.routes.ts)
 
   // User Preferences
   app.get("/api/preferences", authenticateUser, async (req, res) => {
@@ -648,6 +768,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== SYSTEM SETTINGS ====================
 
+  // GET is intentionally public — frontend needs settings for locale/topic config.
+  // PATCH (below) is admin-only for mutations.
   app.get("/api/settings", async (_req, res) => {
     try {
       const settings = await storage.getSystemSettings();
@@ -657,7 +779,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/settings", authenticateUser, async (req, res) => {
+  app.patch("/api/settings", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const data = insertSystemSettingsSchema.partial().parse(req.body);
       const updated = await storage.updateSystemSettings(data as any);
@@ -668,6 +790,180 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ error: "Failed to update settings" });
       }
+    }
+  });
+
+  // --- Debug Routes ---
+  app.get("/api/debug/article/:id", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const result = await db.select().from(articles).where(eq(articles.id, req.params.id)).limit(1);
+      if (result.length === 0) return res.status(404).send("Article not found");
+      res.json(result[0]);
+    } catch (err: any) {
+      res.status(500).send(err.message);
+    }
+  });
+
+  // --- Admin Fetcher Control ---
+  app.post("/api/admin/fetcher/run", authenticateUser, requireRole("admin"), async (_req, res) => {
+    try {
+      console.log("[API] Manual fetch cycle triggered by admin.");
+      const count = await fetchRealNews();
+      res.json({ message: "Tiered fetch cycle completed", enqueued: count });
+    } catch (error: any) {
+      console.error("[API] Manual fetch error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── Admin Metrics Dashboard ──────────────────────────────────────────────
+  app.get("/api/admin/metrics", authenticateUser, requireRole("admin"), async (req, res) => {
+    const m = metrics;
+    const uptimeMs = Date.now() - m.serverStartTime.getTime();
+
+    const cycleTotal = m.currentCycle.length;
+    const cycleOk = m.currentCycle.filter(s => s.status === "ok").length;
+    const cycleFailed = m.currentCycle.filter(s => s.status === "failed").length;
+    const cycleUnchanged = m.currentCycle.filter(s => s.status === "unchanged").length;
+
+    const slowEndpoints = Object.entries(m.apiLatency)
+      .map(([ep, v]) => ({ endpoint: ep, avgMs: Math.round(v.totalMs / v.count), count: v.count, errors: v.errors }))
+      .sort((a, b) => b.avgMs - a.avgMs)
+      .slice(0, 10);
+
+    const activeErrors = m.errors.filter(e => !e.resolved);
+
+    const queueDepth = await getQueueDepth();
+
+    const topStoriesSrc = await storage.getHomepageClusters(10);
+    const storyQuality = topStoriesSrc.map((s: any) => ({
+      title: s.title?.substring(0, 60),
+      sourceCount: s.sourceCount,
+      velocityScore: s.velocityScore,
+      bias: s.bias,
+      storyPhase: s.storyPhase,
+      proEstablishmentCount: s.proEstablishmentCount,
+      proOppositionCount: s.proOppositionCount,
+    }));
+
+    res.json({
+      uptime: { ms: uptimeMs, human: formatUptime(uptimeMs), serverStartTime: m.serverStartTime },
+      fetch: {
+        totalCycles: m.fetchCycleCount,
+        lastStart: m.lastFetchStart,
+        lastEnd: m.lastFetchEnd,
+        currentCycle: { total: cycleTotal, ok: cycleOk, failed: cycleFailed, unchanged: cycleUnchanged },
+        recentSources: m.recentFetches.slice(0, 50),
+        currentSources: m.currentCycle,
+      },
+      worker: {
+        total: m.workerTotal, success: m.workerSuccess, failed: m.workerFailed, duplicate: m.workerDuplicate,
+        successRate: m.workerTotal > 0 ? Math.round((m.workerSuccess / m.workerTotal) * 100) : 0,
+        recentJobs: m.recentJobs.slice(0, 50),
+      },
+      clustering: {
+        matches: m.clusterMatches, newClusters: m.clusterNew, merges: m.clusterMerges,
+        matchRate: (m.clusterMatches + m.clusterNew) > 0
+          ? Math.round((m.clusterMatches / (m.clusterMatches + m.clusterNew)) * 100) : 0,
+        recentEvents: m.recentClusters.slice(0, 50),
+        scoreDistribution: (m as any).scoreDistribution || [],
+      },
+      api: {
+        total: m.apiTotal, errors: m.apiErrors,
+        errorRate: m.apiTotal > 0 ? Math.round((m.apiErrors / m.apiTotal) * 100) : 0,
+        slowEndpoints, recentCalls: m.recentApiCalls.slice(0, 30),
+      },
+      schedulers: {
+        lastVelocityRun: m.lastVelocityRun, lastReclusterRun: m.lastReclusterRun, lastEnrichmentRun: m.lastEnrichmentRun,
+        recentRuns: m.schedulerRuns.slice(0, 20),
+      },
+      errors: {
+        total: activeErrors.length, counts: m.errorCounts,
+        active: activeErrors.slice(0, 100), all: m.errors.slice(0, 100),
+      },
+      process: {
+        memoryMB: m.memoryMB,
+        memoryHistory: m.memoryHistory,
+      },
+      queueDepth,
+      storyQuality,
+    });
+  });
+
+  app.post("/api/admin/metrics/resolve/:id", authenticateUser, requireRole("admin"), (req, res) => {
+    resolveError(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/admin/metrics/errors", authenticateUser, requireRole("admin"), (req, res) => {
+    metrics.errors = [];
+    metrics.errorCounts = { info: 0, warn: 0, critical: 0, perf: 0 };
+    res.json({ ok: true });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // LOG QUERY API — LLM-friendly structured log access
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** Query logs with filters. Admin only. */
+  app.get("/api/admin/logs", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const entries = await queryLogs({
+        hours: parseInt(req.query.hours as string) || 6,
+        level: (req.query.level as LogLevel) || undefined,
+        source: (req.query.source as LogSource) || undefined,
+        search: (req.query.search as string) || undefined,
+        limit: parseInt(req.query.limit as string) || 200,
+      });
+      res.json({ count: entries.length, entries });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /** Structured summary of all log files. Admin only. */
+  app.get("/api/admin/logs/summary", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const files = await getLogFilesSummary();
+      res.json({ files });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /** Export raw JSONL log file for LLM analysis. Admin only. */
+  app.get("/api/admin/logs/export", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const content = await exportCurrentSession();
+      res.setHeader("Content-Type", "application/jsonl");
+      res.setHeader("Content-Disposition", "attachment; filename=server-logs.jsonl");
+      res.send(content);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /** AI-friendly structured diagnosis report. Admin only. */
+  app.get("/api/admin/logs/diagnosis", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const diagnosis = await generateDiagnosis();
+      res.json(diagnosis);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /** Client-side error ingestion (public — no auth required, rate-limited). */
+  app.post("/api/logs/client", (req, res) => {
+    try {
+      const { errors } = req.body;
+      if (!Array.isArray(errors) || errors.length === 0) {
+        return res.status(400).json({ error: "errors array required" });
+      }
+      logClientError(errors.slice(0, 20)); // Max 20 per batch
+      res.json({ received: errors.length });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 

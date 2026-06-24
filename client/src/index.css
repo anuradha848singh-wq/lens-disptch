@@ -2,65 +2,82 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Ground News production palette */
-:root {
-  --button-outline: rgba(0,0,0, .12);
-  --badge-outline: rgba(0,0,0, .06);
-  --opaque-button-border-intensity: -8;
-  --elevate-1: rgba(0,0,0, .03);
-  --elevate-2: rgba(0,0,0, .07);
+/* ══════════════════════════════════════════════════════════
+   THE LENS DISPATCH — Design System
+   ══════════════════════════════════════════════════════════ */
 
-  /* Core colors */
-  --background: 0 0% 97%;
-  --foreground: 0 0% 10%;
-  --border: 0 0% 88%;
+:root {
+  /* Interaction intensities */
+  --button-outline: rgba(0,0,0, .15);
+  --badge-outline: rgba(0,0,0, .1);
+  --opaque-button-border-intensity: -12;
+  --elevate-1: rgba(0,0,0, .02);
+  --elevate-2: rgba(0,0,0, .05);
+
+  /* Core colors — Antique Paper & Ink */
+  --background: 37 34% 94%;    /* #F5F0E8 - Warm Cream */
+  --foreground: 0 0% 12%;      /* #1f1f1f - Printing Ink */
+  --border: 40 10% 88%;
   --card: 0 0% 100%;
-  --card-foreground: 0 0% 10%;
-  --card-border: 0 0% 90%;
-  --sidebar: 220 14% 96%;
-  --sidebar-foreground: 0 0% 12%;
-  --sidebar-border: 0 0% 88%;
-  --sidebar-primary: 0 80% 42%;
-  --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 0 50% 94%;
-  --sidebar-accent-foreground: 0 80% 38%;
-  --sidebar-ring: 0 80% 42%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 10%;
-  --popover-border: 0 0% 88%;
-  --primary: 0 80% 42%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 94%;
-  --secondary-foreground: 0 0% 15%;
-  --muted: 0 0% 95%;
-  --muted-foreground: 0 0% 46%;
-  --accent: 0 0% 94%;
+  --card-foreground: 0 0% 12%;
+  --card-border: 40 10% 80%;
+
+  --sidebar: 40 20% 94%;
+  --sidebar-foreground: 0 0% 15%;
+  --sidebar-border: 40 10% 88%;
+
+  --popover: 40 33% 98%;
+  --popover-foreground: 0 0% 12%;
+  --popover-border: 40 10% 85%;
+
+  --primary: 0 0% 10%;
+  --primary-foreground: 40 33% 98%;
+
+  --secondary: 40 15% 90%;
+  --secondary-foreground: 0 0% 20%;
+
+  --muted: 40 10% 92%;
+  --muted-foreground: 0 0% 40%;
+
+  --accent: 40 15% 90%;
   --accent-foreground: 0 0% 15%;
-  --destructive: 0 80% 42%;
-  --destructive-foreground: 0 0% 100%;
-  --input: 0 0% 88%;
-  --ring: 0 80% 42%;
+
+  --destructive: 0 84% 40%;
+  --destructive-foreground: 0 0% 98%;
+
+  --input: 40 10% 88%;
+  --ring: 0 0% 10%;
 
   /* Charts */
-  --chart-1: 217 91% 55%;
-  --chart-2: 271 81% 55%;
-  --chart-3: 0 80% 42%;
-  --chart-4: 142 71% 45%;
-  --chart-5: 36 96% 50%;
+  --chart-1: 215 80% 40%;
+  --chart-2: 270 60% 45%;
+  --chart-3: 0 75% 45%;
+  --chart-4: 150 60% 35%;
+  --chart-5: 35 90% 45%;
 
-  /* Fonts */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-serif: 'Georgia', serif;
-  --font-mono: 'Courier New', monospace;
-  --radius: 0.25rem;
+  /* Typography */
+  --font-serif: "Lora", Georgia, serif;
+  --font-sans: "DM Sans", sans-serif;
+  --font-display: "Playfair Display", Georgia, serif;
+  --line-height-tight: 1.05;
+  --line-height-snug: 1.15;
+  --line-height-digest: 1.25;
+  --radius: 0px;
+
+  /* Semantic surface tokens */
+  --color-surface-raised: hsl(40 15% 94%);
+  --color-background-secondary: hsl(40 15% 92%);
+  --color-border-tertiary: hsl(40 10% 82%);
+  --color-text-primary: hsl(0 0% 12%);
+  --color-text-tertiary: hsl(0 0% 45%);
 
   /* Shadows */
-  --shadow-2xs: 0px 1px 2px rgba(0,0,0,0.05);
-  --shadow-xs:  0px 1px 3px rgba(0,0,0,0.07);
-  --shadow-sm:  0px 1px 4px rgba(0,0,0,0.08), 0px 1px 2px rgba(0,0,0,0.04);
-  --shadow:     0px 2px 6px rgba(0,0,0,0.08), 0px 1px 3px rgba(0,0,0,0.04);
-  --shadow-md:  0px 4px 10px rgba(0,0,0,0.08), 0px 2px 4px rgba(0,0,0,0.05);
-  --shadow-lg:  0px 8px 24px rgba(0,0,0,0.08), 0px 4px 8px rgba(0,0,0,0.04);
+  --shadow-2xs: 0px 1px 1px rgba(0,0,0,0.03);
+  --shadow-xs:  0px 1px 2px rgba(0,0,0,0.05);
+  --shadow-sm:  1px 1px 0px rgba(0,0,0,0.05);
+  --shadow:     1px 1px 2px rgba(0,0,0,0.08);
+  --shadow-md:  2px 2px 4px rgba(0,0,0,0.08);
+  --shadow-lg:  4px 4px 12px rgba(0,0,0,0.08);
 
   /* Border derivations */
   --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
@@ -68,13 +85,14 @@
   --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
   --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
   --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary, var(--primary))) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent, var(--accent))) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
 
-  /* Bias colors — Ground News exact palette */
-  --bias-left:   217 91% 55%;
-  --bias-center: 271 65% 52%;
-  --bias-right:  0 80% 48%;
+  /* Bias colors */
+  --bias-left:   225 73% 48%;
+  --bias-center: 215 14% 34%;
+  --bias-right:  0 72% 51%;
+  --accent-editorial: 350 73% 44%;
 }
 
 .dark {
@@ -138,12 +156,58 @@
   --bias-right:  0 78% 55%;
 }
 
+/* ── Base Layer ──────────────────────────────────────────── */
 @layer base {
   * { @apply border-border; }
-  body { @apply font-sans antialiased bg-background text-foreground; }
+  html { scroll-behavior: smooth; }
+  body { @apply font-sans antialiased bg-background text-foreground leading-[1.6] text-sm; color: var(--color-text-primary); }
 }
 
+/* ── Component Layer ──────────────────────────────────────── */
+@layer components {
+  /* Newspaper digest density items */
+  .newspaper-digest-item {
+    @apply py-1 border-b border-border/30 last:border-0;
+  }
+
+  .newspaper-digest-title {
+    @apply text-[14px] font-bold leading-[1.25] font-serif hover:text-primary transition-colors tracking-tight;
+  }
+
+  .newspaper-digest-meta {
+    @apply text-[9px] font-bold uppercase tracking-tighter text-muted-foreground mt-0.5;
+  }
+
+  /* Glass morphism card */
+  .glass {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .dark .glass {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  /* Editorial section header */
+  .section-header {
+    @apply flex items-center gap-3 mb-6 pb-2 border-b-2 border-primary;
+  }
+  .section-title {
+    @apply text-xl font-display font-black uppercase tracking-tight;
+  }
+}
+
+/* ── Utility Layer ────────────────────────────────────────── */
 @layer utilities {
+  .font-serif { font-family: var(--font-serif); }
+  .font-sans  { font-family: var(--font-sans); }
+  .font-display { font-family: "Playfair Display", Georgia, serif; }
+
+  .line-height-tight  { line-height: var(--line-height-tight); }
+  .line-height-digest { line-height: var(--line-height-digest); }
+
   /* Elevation system */
   .no-default-hover-elevate {}
   .no-default-active-elevate {}
@@ -179,15 +243,22 @@
   .bias-left-text   { color: hsl(var(--bias-left)); }
   .bias-center-text { color: hsl(var(--bias-center)); }
   .bias-right-text  { color: hsl(var(--bias-right)); }
-  .bias-left-bg   { background-color: hsl(var(--bias-left) / 0.12); }
-  .bias-center-bg { background-color: hsl(var(--bias-center) / 0.12); }
-  .bias-right-bg  { background-color: hsl(var(--bias-right) / 0.12); }
+  .bias-left-bg   { background-color: hsl(var(--bias-left) / 0.1); }
+  .bias-center-bg { background-color: hsl(var(--bias-center) / 0.1); }
+  .bias-right-bg  { background-color: hsl(var(--bias-right) / 0.1); }
+  .accent-editorial        { color: hsl(var(--accent-editorial)); }
+  .accent-editorial-bg     { background-color: hsl(var(--accent-editorial)); }
+  .accent-editorial-subtle { background-color: hsl(var(--accent-editorial) / 0.1); }
+  .text-accent-editorial   { color: hsl(var(--accent-editorial)); }
+  .bg-accent-editorial     { background-color: hsl(var(--accent-editorial)); }
 
   /* Scrollbar hide */
   .scrollbar-hide::-webkit-scrollbar { display: none; }
   .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
 
-  /* Ticker */
+  /* ── Animations ── */
+
+  /* Breaking news ticker scroll */
   @keyframes ticker-scroll {
     0%   { transform: translateX(0); }
     100% { transform: translateX(-50%); }
@@ -195,9 +266,46 @@
   .animate-ticker { animation: ticker-scroll 40s linear infinite; }
   .animate-ticker:hover { animation-play-state: paused; }
 
-  /* Line clamp */
+  /* Card fade-in */
+  @keyframes card-fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card-animate { animation: card-fade-in 0.35s ease-out both; }
+
+  /* Shimmer skeleton loading */
+  @keyframes shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .animate-shimmer {
+    background: linear-gradient(90deg,
+      hsl(var(--muted)) 25%,
+      hsl(var(--secondary)) 50%,
+      hsl(var(--muted)) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  /* Fade up list animation */
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-up { animation: fade-up 0.4s ease-out both; }
+  .stagger-1 { animation-delay: 0.05s; }
+  .stagger-2 { animation-delay: 0.1s; }
+  .stagger-3 { animation-delay: 0.15s; }
+  .stagger-4 { animation-delay: 0.2s; }
+  .stagger-5 { animation-delay: 0.25s; }
+
+  /* Line clamp utilities */
   .line-clamp-1 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
   .line-clamp-2 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .line-clamp-3 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
   .line-clamp-4 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+
+  /* Focus visible ring */
+  :focus-visible { outline: 2px solid hsl(var(--accent-editorial)); outline-offset: 2px; }
 }

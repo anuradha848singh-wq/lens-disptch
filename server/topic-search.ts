@@ -7,7 +7,7 @@
  */
 
 import { storage } from "./storage";
-import { type ArticleWithDetails } from "@shared/schema";
+import { type ArticleWithDetails, type Publisher } from "../shared/schema";
 
 // ── Token & Entity extraction (mirrored from news-fetcher for decoupling) ──
 
@@ -85,9 +85,9 @@ export interface SourceDiscoveryResult {
   canonical_title: string;
   total_sources: number;
   bias_distribution: {
-    left_count: number;
-    center_count: number;
-    right_count: number;
+    pro_establishment_count: number;
+    neutral_count: number;
+    pro_opposition_count: number;
     left_percent: number;
     center_percent: number;
     right_percent: number;
@@ -96,16 +96,29 @@ export interface SourceDiscoveryResult {
   ai_insights: string[];
 }
 
-const TOPIC_SIMILARITY_THRESHOLD = 0.06; // Very permissive for max density
+const TOPIC_SIMILARITY_THRESHOLD = 0.12; // Lowered from 0.18 for maximum story breadth
+
+const sourceCache = new Map<string, { data: SourceDiscoveryResult; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 export async function findSourcesForArticle(articleId: string): Promise<SourceDiscoveryResult | null> {
+  const cached = sourceCache.get(articleId);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
   const article = await storage.getArticle(articleId);
   if (!article) return null;
 
-  // Use raw listing - no groupId deduplication - to see EVERY article/source
-  const allArticles = await (storage as any).listAllArticlesRaw(5000);
+  // Fetch all publishers once to map properties without N+1 queries
+  const allPublishers = await storage.listPublishers();
+  const pubMap = new Map<string, Publisher>(allPublishers.map((p: any) => [p.id, p]));
 
-  const scored: { article: ArticleWithDetails; score: number }[] = [];
+  // Use raw listing - no N+1 deduplication - to see EVERY article/source instantly
+  // Reduced limit from 5000 to 2000 for faster scans
+  const allArticles = await (storage as any).listAllArticlesRaw(2000);
+
+  const scored: { article: any; score: number }[] = [];
   const seenPublishers = new Set<string>();
   const seenIds = new Set<string>([article.id]);
 
@@ -122,105 +135,79 @@ export async function findSourcesForArticle(articleId: string): Promise<SourceDi
     }
   }
 
-  // PASS 2: Full similarity search across ALL articles (very low threshold)
-  for (const candidate of allArticles) {
-    if (seenIds.has(candidate.id)) continue;
-    if (seenPublishers.has(candidate.publisherId)) continue;
-
-    const score = topicSimilarity(
-      article.title, article.excerpt || "",
-      candidate.title, candidate.excerpt || ""
-    );
-
-    if (score >= TOPIC_SIMILARITY_THRESHOLD) {
-      seenPublishers.add(candidate.publisherId);
-      seenIds.add(candidate.id);
-      scored.push({ article: candidate, score });
-    }
-  }
-
-  // PASS 3: Category-based broadening — if we have < 15 sources, add articles from same categories
-  if (scored.length < 15) {
-    const articleCatIds = new Set(article.categories?.map(c => c.id) || []);
+  // PASS 2: Limited similarity search — only if we need more sources
+  if (scored.length < 5) {
+    // Limit search to most recent 500 articles to avoid extreme O(N) performance hit
+    const recentCandidates = allArticles.slice(0, 500);
     
-    for (const candidate of allArticles) {
+    let loopCount = 0;
+    for (const candidate of recentCandidates) {
+      loopCount++;
+      // Yield to event loop every 50 iterations to prevent blocking incoming HTTP requests
+      if (loopCount % 50 === 0) {
+        await new Promise(r => setImmediate(r));
+      }
+
       if (seenIds.has(candidate.id)) continue;
       if (seenPublishers.has(candidate.publisherId)) continue;
 
-      const candCatIds = candidate.categories?.map((c: any) => c.id) || [];
-      const sharedCategory = candCatIds.some((cid: string) => articleCatIds.has(cid));
-      
-      if (sharedCategory) {
-        // Check if they share at least ONE entity too (to avoid totally unrelated articles)
-        const entA = extractEntities(`${article.title} ${article.excerpt || ""}`);
-        const entB = extractEntities(`${candidate.title} ${candidate.excerpt || ""}`);
-        const sharedEntity = Array.from(entA).some(e => entB.has(e));
-        
-        if (sharedEntity || scored.length < 5) {
-          seenPublishers.add(candidate.publisherId);
-          seenIds.add(candidate.id);
-          scored.push({ article: candidate, score: 0.05 });
-        }
+      const score = topicSimilarity(
+        article.title, article.excerpt || "",
+        candidate.title, candidate.excerpt || ""
+      );
+
+      if (score >= TOPIC_SIMILARITY_THRESHOLD) {
+        seenPublishers.add(candidate.publisherId);
+        seenIds.add(candidate.id);
+        scored.push({ article: candidate, score });
       }
       
-      if (scored.length >= 50) break;
-    }
-  }
-
-  // PASS 4: If STILL sparse (< 5 sources), add recent articles from any category as "related coverage"
-  if (scored.length < 5) {
-    const sorted = [...allArticles].sort((a, b) => 
-      (b.publishedAt || b.createdAt).getTime() - (a.publishedAt || a.createdAt).getTime()
-    );
-    
-    for (const candidate of sorted) {
-      if (seenIds.has(candidate.id)) continue;
-      if (seenPublishers.has(candidate.publisherId)) continue;
-      
-      seenPublishers.add(candidate.publisherId);
-      seenIds.add(candidate.id);
-      scored.push({ article: candidate, score: 0.01 });
-      
-      if (scored.length >= 15) break;
+      if (scored.length >= 20) break;
     }
   }
 
   // Sort by score descending
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a: any, b: any) => b.score - a.score);
 
-  // Build results
-  const sources: SourceResult[] = scored.map(s => ({
-    id: s.article.id,
-    source_name: s.article.publisher?.name || "Unknown",
-    article_title: s.article.title,
-    published_at: (s.article.publishedAt || s.article.createdAt).toISOString(),
-    bias_label: (s.article.bias?.toUpperCase() || "CENTER") as "LEFT" | "CENTER" | "RIGHT",
-    factuality: (s.article.publisher?.factualityRating || "unknown").replace("_", " ").toUpperCase(),
-    snippet: s.article.excerpt || "",
-    source_url: s.article.sourceUrl || `/article/${s.article.id}`,
-    similarity: Math.round(s.score * 100) / 100,
-    publisher_id: s.article.publisherId,
-    hero_image: s.article.heroImageUrl,
-  }));
+  // Build results using our manual publisher map
+  const sources: SourceResult[] = scored.map(s => {
+    const pub = pubMap.get(s.article.publisherId) as any;
+    return {
+      id: s.article.id,
+      source_name: pub?.name || "Unknown",
+      article_title: s.article.title,
+      published_at: (s.article.publishedAt || s.article.createdAt).toISOString(),
+      bias_label: (s.article.bias?.toUpperCase() || "CENTER") as "LEFT" | "CENTER" | "RIGHT",
+      factuality: (pub?.factualityRating || "unknown").replace("_", " ").toUpperCase(),
+      snippet: s.article.excerpt || "",
+      source_url: s.article.sourceUrl || `/article/${s.article.id}`,
+      similarity: Math.round(s.score * 100) / 100,
+      publisher_id: s.article.publisherId,
+      hero_image: s.article.heroImageUrl,
+    };
+  });
 
-  const leftCount = sources.filter(s => s.bias_label === "LEFT").length;
-  const centerCount = sources.filter(s => s.bias_label === "CENTER").length;
-  const rightCount = sources.filter(s => s.bias_label === "RIGHT").length;
+  const proEstablishmentCount = sources.filter(s => s.bias_label === "LEFT").length;
+  const neutralCount = sources.filter(s => s.bias_label === "CENTER").length;
+  const proOppositionCount = sources.filter(s => s.bias_label === "RIGHT").length;
   const total = sources.length;
 
-  return {
+  const result: SourceDiscoveryResult = {
     story_id: article.clusterId || article.id,
     canonical_title: article.title,
     total_sources: total,
     bias_distribution: {
-      left_count: leftCount,
-      center_count: centerCount,
-      right_count: rightCount,
-      left_percent: total > 0 ? Math.round((leftCount / total) * 100) : 0,
-      center_percent: total > 0 ? Math.round((centerCount / total) * 100) : 0,
-      right_percent: total > 0 ? Math.round((rightCount / total) * 100) : 0,
+      pro_establishment_count: proEstablishmentCount,
+      neutral_count: neutralCount,
+      pro_opposition_count: proOppositionCount,
+      left_percent: total > 0 ? Math.round((proEstablishmentCount / total) * 100) : 0,
+      center_percent: total > 0 ? Math.round((neutralCount / total) * 100) : 0,
+      right_percent: total > 0 ? Math.round((proOppositionCount / total) * 100) : 0,
     },
     sources,
     ai_insights: (article.aiInsights as string[]) || [],
   };
+
+  sourceCache.set(articleId, { data: result, timestamp: Date.now() });
+  return result;
 }

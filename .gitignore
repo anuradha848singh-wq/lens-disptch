@@ -5,9 +5,33 @@ server/public
 vite.config.ts.*
 *.tar.gz
 .env
+.env.*
+!.env.example
 .replit
 .parcel-cache
 .jshintrc
 .editorconfig
 *.log
 .local
+
+# Temp / build artifacts
+uploads/
+logs/
+*.db
+*.sqlite
+server_log.txt
+structure.txt
+temp_articles.json
+client.zip
+server.zip
+image.png
+diff.txt
+errors.txt
+
+# IDE / system
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+.gemini/

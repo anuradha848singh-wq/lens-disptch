@@ -25,7 +25,7 @@ import { type ArticleWithDetails, type Publisher, type Category } from "@shared/
 
 type View = "list" | "create" | "edit";
 
-const EMPTY_FORM = { title: "", slug: "", excerpt: "", bodyHtml: "", heroImageUrl: "", publisherId: "", bias: "", categoryIds: [] as string[], tagNames: "" };
+const EMPTY_FORM = { title: "", slug: "", excerpt: "", bodyHtml: "", heroImageUrl: "", sourceId: "", bias: "", categoryIds: [] as string[], tagNames: "" };
 
 function slugify(str: string) {
   return str.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -56,11 +56,11 @@ export default function EditorDashboard() {
   const { data: publishers = [] } = useQuery({ queryKey: ["/api/publishers"], queryFn: api.publishers.list });
   const { data: categories = [] } = useQuery({ queryKey: ["/api/categories"], queryFn: api.categories.list });
 
-  const myArticles = articlesData?.articles.filter((a: ArticleWithDetails) => a.authorId === user.id) ?? [];
+  const myArticles = articlesData?.articles ?? [];
 
   const createMutation = useMutation({
     mutationFn: (status: "draft" | "published") => {
-      const payload = { ...form, status, authorId: user.id };
+      const payload = { ...form, status };
       return api.articles.create(payload);
     },
     onSuccess: (_, status) => {
@@ -98,11 +98,11 @@ export default function EditorDashboard() {
     setForm({
       title: article.title,
       slug: article.slug,
-      excerpt: article.excerpt,
+      excerpt: article.excerpt ?? "",
       bodyHtml: article.bodyHtml,
       heroImageUrl: article.heroImageUrl ?? "",
-      publisherId: article.publisherId,
-      bias: article.bias,
+      sourceId: article.sourceId,
+      bias: article.bias ?? "",
       categoryIds: article.categories?.map((c) => c.id) ?? [],
       tagNames: article.tags?.map((t) => t.name).join(", ") ?? "",
     });
@@ -216,7 +216,7 @@ export default function EditorDashboard() {
                             </TableCell>
                             <TableCell className="hidden md:table-cell text-sm">{article.categories?.[0]?.name ?? "—"}</TableCell>
                             <TableCell className="hidden md:table-cell">
-                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${article.bias === "left" ? "bg-blue-100 text-blue-700" : article.bias === "right" ? "bg-red-100 text-red-700" : "bg-purple-100 text-purple-700"}`}>
+                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${article.bias === "pro_establishment" ? "bg-blue-100 text-blue-700" : article.bias === "pro_opposition" ? "bg-red-100 text-red-700" : "bg-purple-100 text-purple-700"}`}>
                                 {article.bias}
                               </span>
                             </TableCell>
@@ -309,7 +309,7 @@ export default function EditorDashboard() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1.5">
                       <Label>Publisher *</Label>
-                      <Select value={form.publisherId} onValueChange={(v) => setForm({ ...form, publisherId: v })}>
+                      <Select value={form.sourceId} onValueChange={(v) => setForm({ ...form, sourceId: v })}>
                         <SelectTrigger data-testid="select-publisher">
                           <SelectValue placeholder="Select publisher" />
                         </SelectTrigger>
@@ -380,14 +380,14 @@ export default function EditorDashboard() {
                         <Button
                           variant="outline"
                           onClick={() => createMutation.mutate("draft")}
-                          disabled={createMutation.isPending || !form.title || !form.slug || !form.excerpt || !form.bodyHtml || !form.publisherId || !form.bias}
+                          disabled={createMutation.isPending || !form.title || !form.slug || !form.excerpt || !form.bodyHtml || !form.sourceId || !form.bias}
                           data-testid="button-save-draft"
                         >
                           <Clock className="w-4 h-4 mr-1.5" />Save Draft
                         </Button>
                         <Button
                           onClick={() => createMutation.mutate("published")}
-                          disabled={createMutation.isPending || !form.title || !form.slug || !form.excerpt || !form.bodyHtml || !form.publisherId || !form.bias}
+                          disabled={createMutation.isPending || !form.title || !form.slug || !form.excerpt || !form.bodyHtml || !form.sourceId || !form.bias}
                           data-testid="button-publish"
                         >
                           <CheckCircle className="w-4 h-4 mr-1.5" />Publish Article

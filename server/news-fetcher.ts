@@ -1,777 +1,713 @@
 /**
- * Real News Fetcher — pulls live articles from GNews API
+ * News Fetcher (Producer) — pulls live articles and enqueues them for processing.
+ * Refactored to use BullMQ for scalable background processing.
  * 
- * GNews API is free (100 requests/day, 10 articles/request).
- * Set NEWS_API_KEY environment variable with your key from https://gnews.io
- * 
- * Falls back to NewsAPI.org if NEWSAPI_KEY is set instead.
- * If neither key is set, it fetches from public RSS feeds as a fallback.
+ * Resilience features:
+ *  - Exponential backoff retry (3 attempts) for every RSS fetch
+ *  - Circuit breaker: auto-disables publishers after 10 consecutive failures
+ *  - Enhanced structured logging with failure categorisation
  */
 
 import { storage } from "./storage";
-import { type Article } from "@shared/schema";
-import * as cheerio from "cheerio";
+import { RSS_SOURCES, QUALITY_GATES } from "./rss-sources";
 import Parser from "rss-parser";
-import { RSS_SOURCES } from "./rss-sources";
-import crypto from "crypto";
+import { articleQueue, heavyTaskQueue } from "./queue";
+import { db } from "./db";
+import { users, publishers as publishersTable, articles, clusters } from "../shared/schema";
+import { recordFetchStart, recordFetchEnd, recordFetchSource } from "./metrics";
+import { preIngestQualityGate, formatRejection } from "./quality-gate";
+import { createHash } from "crypto";
+import { embeddingService } from "./lib/embeddings-client";
+import { eq, sql, and, desc, gte, lt } from "drizzle-orm";
 
+// Deduplication Caches (Scoped by Domain to ensure 20+ sources can cluster)
+const PROCESSED_URL_HASHES = new Set<string>();
+const PROCESSED_TITLE_SHINGLES = new Map<string, Set<string>>(); // Key: "domain:title"
+const MAX_CACHE_SIZE = 50000;
+
+function normalizeUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.search = "";
+    let hostname = parsed.hostname.toLowerCase();
+    if (hostname.startsWith('www.')) hostname = hostname.slice(4);
+    let pathname = parsed.pathname;
+    if (pathname.endsWith('/')) pathname = pathname.slice(0, -1);
+    return `${hostname}${pathname}`;
+  } catch (e) {
+    return url;
+  }
+}
+
+function getShingles(text: string, k = 3): Set<string> {
+  const words = text.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+  const shingles = new Set<string>();
+  for (let i = 0; i <= words.length - k; i++) {
+    shingles.add(words.slice(i, i + k).join(" "));
+  }
+  return shingles;
+}
+
+function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const item of setA) {
+    if (setB.has(item)) intersection++;
+  }
+  const union = setA.size + setB.size - intersection;
+  return intersection / union;
+}
+
+// ─── Exponential Backoff Retry Wrapper ────────────────────────────────────────
+const RETRY_CONFIG = { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 8000 };
+
+async function fetchWithRetry(
+  url: string,
+  headers: Record<string, string>,
+  sourceName: string
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= RETRY_CONFIG.maxAttempts; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(20000),
+      });
+      // Allow 304 Not Modified
+      if (!response.ok && response.status !== 304) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const isRetryable = !err.message?.includes("404") && !err.message?.includes("403") && !err.message?.includes("304");
+      if (attempt < RETRY_CONFIG.maxAttempts && isRetryable) {
+        const delay = Math.min(
+          RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt - 1),
+          RETRY_CONFIG.maxDelayMs
+        );
+        console.warn(
+          `[Fetcher] [Retry] ${sourceName} attempt ${attempt}/${RETRY_CONFIG.maxAttempts} failed: ${err.message}. Retrying in ${delay}ms...`
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastError || new Error(`Fetch failed after ${RETRY_CONFIG.maxAttempts} attempts`);
+}
+
+function categoriseError(err: any): string {
+  const msg = (err.message || "").toLowerCase();
+  if (msg.includes("timeout") || msg.includes("abort")) return "TIMEOUT";
+  if (msg.includes("404")) return "NOT_FOUND";
+  if (msg.includes("403") || msg.includes("401")) return "AUTH_BLOCKED";
+  if (msg.includes("5") && msg.includes("http")) return "SERVER_ERROR";
+  if (msg.includes("enotfound") || msg.includes("econnrefused")) return "DNS_OR_CONN";
+  if (msg.includes("parse") || msg.includes("xml")) return "PARSE_ERROR";
+  return "UNKNOWN";
+}
+
+// ─── Circuit Breaker ──────────────────────────────────────────────────────────
+const CIRCUIT_BREAKER_THRESHOLD = 10; // consecutive failures before auto-disable
+const sourceFailCounts = new Map<string, number>();
+
+async function recordSourceSuccess(sourceName: string): Promise<void> {
+  sourceFailCounts.set(sourceName, 0);
+  // Reset failCount in DB if it was elevated
+  try {
+    const pub = await storage.getPublisherBySlug(sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+    if (pub && pub.failCount > 0) {
+      await db.update(publishersTable).set({ failCount: 0 }).where(eq(publishersTable.id, pub.id));
+    }
+  } catch (_) { }
+}
+
+async function recordSourceFailure(sourceName: string, sourceQuality: number = 60): Promise<boolean> {
+  const count = (sourceFailCounts.get(sourceName) || 0) + 1;
+  sourceFailCounts.set(sourceName, count);
+
+  if (sourceQuality >= 90) {
+    // Tier 1 (Quality >= 90): Exponential cooldown, NEVER permanently disable
+    if (count > 0) {
+      const cooldownCycles = Math.min(Math.pow(2, count - 1), 8);
+      console.error(`[Fetcher] [CircuitBreaker] 🛡️ Protected source ${sourceName} failed ${count} times. Cooldown for ${cooldownCycles} cycles.`);
+      // We don't disable them. Returning false to let the cooldown logic (if any) handle skipped fetches.
+    }
+  } else if (sourceQuality >= 70) {
+    // Tier 2 (Quality 70-89): Auto-disable after 20 consecutive failures
+    if (count >= 20) {
+      console.error(`[Fetcher] [CircuitBreaker] ⚡ Tier-2 source ${sourceName} hit ${count} failures — AUTO-DISABLING.`);
+      try {
+        const slug = sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        const pub = await storage.getPublisherBySlug(slug);
+        if (pub) {
+          await db.update(publishersTable).set({ active: false, failCount: count }).where(eq(publishersTable.id, pub.id));
+        }
+      } catch (dbErr) {
+        console.error(`[Fetcher] [CircuitBreaker] DB update failed for ${sourceName}:`, dbErr);
+      }
+      return true; // circuit is open
+    }
+  } else {
+    // Tier 3 (Quality < 70): Auto-disable after 10 failures
+    if (count >= 10) {
+      console.error(`[Fetcher] [CircuitBreaker] ⚡ Tier-3 source ${sourceName} hit ${count} failures — AUTO-DISABLING.`);
+      try {
+        const slug = sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        const pub = await storage.getPublisherBySlug(slug);
+        if (pub) {
+          await db.update(publishersTable).set({ active: false, failCount: count }).where(eq(publishersTable.id, pub.id));
+        }
+      } catch (dbErr) {
+        console.error(`[Fetcher] [CircuitBreaker] DB update failed for ${sourceName}:`, dbErr);
+      }
+      return true; // circuit is open
+    }
+  }
+
+  // Persist fail count
+  try {
+    const slug = sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const pub = await storage.getPublisherBySlug(slug);
+    if (pub) {
+      await db.update(publishersTable).set({ failCount: count }).where(eq(publishersTable.id, pub.id));
+    }
+  } catch (_) { }
+
+  return false;
+}
+
+// RSS Source configuration
 const parser = new Parser({
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+  },
   customFields: {
     item: [["media:content", "media"], ["content:encoded", "contentEncoded"]],
   }
 });
 
-// Known publisher bias & factuality database (inspired by Media Bias/Fact Check)
-import { EXTENDED_PUBLISHER_BIAS_DB, type PublisherInfo } from "./publisher-bias-db";
+// Admin Control State
+export const adminFetcherConfig = {
+  isPaused: false,
+  fetchIntervalMs: 10 * 60 * 1000,    // 10 minutes (was 30)
+  algorithmIntervalMs: 10 * 60 * 1000 // 10 minutes
+};
 
-const PUBLISHER_BIAS_DB: Record<string, PublisherInfo> = EXTENDED_PUBLISHER_BIAS_DB;
+let lastFetchTime: string | null = null;
+let totalArticlesEnqueued = 0;
 
-function lookupPublisherInfo(sourceName: string, sourceUrl?: string) {
-  const nameLower = sourceName.toLowerCase().trim();
-  
-  // Try exact match first
-  if (PUBLISHER_BIAS_DB[nameLower]) return PUBLISHER_BIAS_DB[nameLower];
-  
-  // Try domain match
-  if (sourceUrl) {
-    try {
-      const domain = new URL(sourceUrl).hostname.replace("www.", "");
-      if (PUBLISHER_BIAS_DB[domain]) return PUBLISHER_BIAS_DB[domain];
-    } catch {}
-  }
-  
-  // Try partial match
-  for (const [key, value] of Object.entries(PUBLISHER_BIAS_DB)) {
-    if (nameLower.includes(key) || key.includes(nameLower)) return value;
-  }
-  
-  // Default: center, mixed
-  return { 
-    bias: "center" as const, 
-    factuality: "mixed" as const,
-    ownerName: "Unknown",
-    ownerType: "unknown" as const,
+export function getAdminFetcherStatus() {
+  return {
+    ...adminFetcherConfig,
+    lastFetchTime,
+    totalArticlesEnqueued,
+    sourcesConfigured: Object.values(RSS_SOURCES).flat().length,
+    queueActive: true
   };
 }
 
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .substring(0, 200);
-}
-
-// Guess category from article keywords/title
-function guessCategory(title: string, description?: string): string {
-  const text = `${title} ${description || ""}`.toLowerCase();
-  
-  if (/politic|election|congress|senate|white house|parliament|government|democrat|republican|vote|legislat|sanctions|treaty|modi|bjp|lok sabha|rajya sabha/.test(text)) return "politics";
-  if (/tech| ai |artificial|software|algorithm|semiconductor|cloud|compute|startup|cyber|robot|app|iphone|android|social media/.test(text)) return "technology";
-  if (/business|economy|stock|market|nasdaq|dow jones|gdp|inflation|trade|finance|bank|crypto|bitcoin|investing|earnings|ceo|sensex|nifty|rupee/.test(text)) return "business";
-  if (/health|medical|doctor|hospital|science|research|vaccine|drug|disease|mental|covid|cancer|surgery|biology/.test(text)) return "health";
-  if (/sport|game|team|player|league|championship|cup|tournament|stadium|medal|football|basketball|soccer|tennis|cricket|ipl/.test(text)) return "sports";
-  if (/world|global|international|nation|foreign|conflict|war|peace|summit|un |nato|eu |europe|africa|asia|middle east/.test(text)) return "world";
-  if (/movie|film|actor|music|song|album|concert|celebrity|hollywood|bollywood|netflix|streaming|theater|entertainment/.test(text)) return "entertainment";
-  return "politics"; // default
-}
-
-interface GNewsArticle {
-  title: string;
-  description: string;
-  content: string;
-  url: string;
-  image: string;
-  publishedAt: string;
-  source: {
-    name: string;
-    url: string;
-  };
-}
-
-interface NewsAPIArticle {
-  title: string;
-  description: string;
-  content: string;
-  url: string;
-  urlToImage: string;
-  publishedAt: string;
-  source: {
-    id: string | null;
-    name: string;
-  };
-  author: string;
-}
-
-interface ArticleToProcess {
-  title: string;
-  description?: string;
-  content?: string;
-  url: string;
-  image?: string;
-  publishedAt: string;
-  source: {
-    name: string;
-    url?: string;
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// GLOBAL RSS FEED LIST — REGION-WISE
-// Each feed is tagged with a region code so the fetcher can filter
-// based on the user's configured country in Settings.
-// ═══════════════════════════════════════════════════════════════════
-
-type RSSFeed = { url: string; name: string; region: string; bias?: "left" | "center" | "right" };
-
-const GLOBAL_RSS_FEEDS: RSSFeed[] = [
-  // ── 🇮🇳 INDIA ──
-  { url: "https://www.thehindu.com/news/feeder/default.rss", name: "The Hindu", region: "IN", bias: "center" },
-  { url: "https://indianexpress.com/feed/", name: "Indian Express", region: "IN", bias: "center" },
-  { url: "https://feeds.feedburner.com/ndtvnews-top-stories", name: "NDTV", region: "IN", bias: "left" },
-  { url: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", name: "Times of India", region: "IN", bias: "center" },
-  { url: "https://www.hindustantimes.com/feeds/rss/topnews/rssfeed.xml", name: "Hindustan Times", region: "IN", bias: "center" },
-  { url: "https://www.news18.com/rss/india.xml", name: "News18", region: "IN", bias: "right" },
-  { url: "https://economictimes.indiatimes.com/rssfeedsdefault.cms", name: "Economic Times", region: "IN", bias: "center" },
-  { url: "https://www.business-standard.com/rss/home_page_top_stories.rss", name: "Business Standard", region: "IN", bias: "center" },
-  { url: "https://zeenews.india.com/rss/india-national-news.xml", name: "Zee News", region: "IN", bias: "right" },
-  { url: "https://scroll.in/feeds/all.rss", name: "Scroll.in", region: "IN", bias: "left" },
-
-  // ── 🇺🇸 USA ──
-  { url: "http://rss.cnn.com/rss/edition.rss", name: "CNN", region: "US", bias: "left" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml", name: "The New York Times", region: "US", bias: "left" },
-  { url: "http://feeds.washingtonpost.com/rss/world", name: "Washington Post", region: "US", bias: "left" },
-  { url: "http://feeds.foxnews.com/foxnews/latest", name: "Fox News", region: "US", bias: "right" },
-  { url: "https://feeds.nbcnews.com/nbcnews/public/news", name: "NBC News", region: "US", bias: "left" },
-  { url: "https://abcnews.go.com/abcnews/topstories", name: "ABC News", region: "US", bias: "left" },
-  { url: "https://feeds.npr.org/1001/rss.xml", name: "NPR", region: "US", bias: "left" },
-  { url: "https://www.bloomberg.com/feed/podcast/etf-report.xml", name: "Bloomberg", region: "US", bias: "center" },
-  { url: "https://feeds.a.dj.com/rss/RSSWorldNews.xml", name: "Wall Street Journal", region: "US", bias: "center" },
-  { url: "https://www.politico.com/rss/politicopicks.xml", name: "Politico", region: "US", bias: "left" },
-  { url: "https://nypost.com/feed/", name: "New York Post", region: "US", bias: "right" },
-
-  // ── 🇬🇧 UK ──
-  { url: "https://feeds.bbci.co.uk/news/rss.xml", name: "BBC News", region: "GB", bias: "center" },
-  { url: "https://www.theguardian.com/world/rss", name: "The Guardian", region: "GB", bias: "left" },
-  { url: "https://www.telegraph.co.uk/rss.xml", name: "The Telegraph", region: "GB", bias: "center" },
-  { url: "https://feeds.skynews.com/feeds/rss/home.xml", name: "Sky News", region: "GB", bias: "center" },
-  { url: "https://www.ft.com/rss/home", name: "Financial Times", region: "GB", bias: "center" },
-
-  // ── 🌍 GLOBAL / INTERNATIONAL ──
-  { url: "https://www.reutersagency.com/feed/?best-topics=business-finance", name: "Reuters", region: "GLOBAL", bias: "center" },
-  { url: "https://apnews.com/rss", name: "Associated Press", region: "GLOBAL", bias: "center" },
-  { url: "https://www.aljazeera.com/xml/rss/all.xml", name: "Al Jazeera", region: "GLOBAL", bias: "center" },
-  { url: "https://www.france24.com/en/rss", name: "France 24", region: "GLOBAL", bias: "center" },
-  { url: "https://rss.dw.com/xml/rss-en-all", name: "Deutsche Welle", region: "GLOBAL", bias: "center" },
-  { url: "https://www.euronews.com/rss", name: "Euronews", region: "GLOBAL", bias: "center" },
-
-  // ── 🌏 ASIA ──
-  { url: "https://www.scmp.com/rss/91/feed", name: "South China Morning Post", region: "ASIA", bias: "center" },
-  { url: "https://www.japantimes.co.jp/feed/topstories/", name: "Japan Times", region: "ASIA", bias: "center" },
-  { url: "https://www.straitstimes.com/news/rss.xml", name: "Straits Times", region: "ASIA", bias: "center" },
-  { url: "https://www.channelnewsasia.com/rssfeeds/8395986", name: "Channel News Asia", region: "ASIA", bias: "center" },
-  { url: "https://www.dawn.com/feeds/home", name: "Dawn", region: "ASIA", bias: "center" },
-
-  // ── 🌍 AFRICA ──
-  { url: "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf", name: "AllAfrica", region: "AFRICA", bias: "center" },
-  { url: "https://www.news24.com/rss", name: "News24", region: "AFRICA", bias: "center" },
-
-  // ── 🌎 LATIN AMERICA ──
-  { url: "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", name: "Folha de S.Paulo", region: "LATAM", bias: "center" },
-  { url: "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada", name: "El País", region: "LATAM", bias: "center" },
-];
-
-async function fetchFromRSS(feed: { url: string; name: string }): Promise<ArticleToProcess[]> {
-  try {
-    const parser = new Parser({
-      timeout: 10000,
-      customFields: {
-        item: ['media:content', 'media:thumbnail', 'enclosure'],
-      }
-    });
-    
-    const feedData = await parser.parseURL(feed.url);
-    
-    return (feedData.items || []).map((item) => {
-      let image = item.enclosure?.url;
-      if (!image && item['media:content'] && item['media:content']['$'] && item['media:content']['$'].url) {
-        image = item['media:content']['$'].url;
-      }
-      if (!image && item['media:thumbnail'] && item['media:thumbnail']['$'] && item['media:thumbnail']['$'].url) {
-        image = item['media:thumbnail']['$'].url;
-      }
-      
-      return {
-        title: item.title || "Untitled",
-        description: item.contentSnippet || item.content || "",
-        content: item.content || "",
-        url: item.link || "",
-        image: image,
-        publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
-        source: { name: feed.name, url: feed.url }
-      };
-    });
-  } catch (err) {
-    console.warn(`[news-fetcher] Native RSS fetch failed for ${feed.name}:`, err);
-    return [];
+export function updateAdminFetcherConfig(updates: Partial<typeof adminFetcherConfig>) {
+  const oldInterval = adminFetcherConfig.fetchIntervalMs;
+  Object.assign(adminFetcherConfig, updates);
+  // Restart fetch timer if interval changed
+  if (updates.fetchIntervalMs && updates.fetchIntervalMs !== oldInterval) {
+    console.log(`[Fetcher] Interval changed from ${oldInterval}ms to ${updates.fetchIntervalMs}ms — restarting timer.`);
+    stopAutoFetch();
+    startAutoFetch();
   }
-}
-
-async function fetchFromGNews(apiKey: string, category?: string, query?: string): Promise<GNewsArticle[]> {
-  try {
-    let url = "";
-    if (query) {
-      url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=10&apikey=${apiKey}`;
-    } else {
-      url = `https://gnews.io/api/v4/top-headlines?category=${category || "general"}&lang=en&max=10&apikey=${apiKey}`;
-    }
-    
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`GNews ${category || query} failed: ${res.status}`);
-      return [];
-    }
-    const data = await res.json();
-    return data.articles || [];
-  } catch (err) {
-    console.warn(`GNews ${category || query} error:`, err);
-    return [];
-  }
-}
-
-async function fetchFromNewsAPI(apiKey: string, category?: string, query?: string): Promise<NewsAPIArticle[]> {
-  try {
-    let url = "";
-    if (query) {
-      url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=en&pageSize=20&apiKey=${apiKey}`;
-    } else {
-      url = `https://newsapi.org/v2/top-headlines?language=en&pageSize=40&apiKey=${apiKey}${category ? `&category=${category}` : ""}`;
-    }
-    
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`NewsAPI ${category || query} failed: ${res.status}`);
-      return [];
-    }
-    const data = await res.json();
-    return data.articles || [];
-  } catch (err) {
-    console.warn("NewsAPI error:", err);
-    return [];
-  }
-}
-
-const GOOGLE_NEWS_TOPICS = [
-  // Technology & Future
-  "Technology", "Artificial Intelligence", "Generative AI", "Semiconductors", "Cybersecurity", 
-  "Quantum Computing", "Space Exploration", "Robotics", "Clean Energy", "Biotechnology",
-  // Finance & Markets
-  "Stock Market", "Global Economy", "Venture Capital", "Cryptocurrency", "Real Estate",
-  "Central Banks", "Inflation", "Trade Policy", "E-commerce", "Startups",
-  // Politics & World
-  "US Politics", "UK News", "European Union", "China Strategy", "Middle East Conflict",
-  "United Nations", "NATO", "Foreign Policy", "Election 2024", "Diplomacy",
-  // Science & Environment
-  "Climate Change", "Renewable Energy", "Astrophysics", "Genetics", "Neuroscience",
-  "Conservation", "Natural Disasters", "Ocean Health", "Agriculture", "Sustainability",
-  // Health & Society
-  "Public Health", "Mental Health", "Longevity", "Nutrition", "Epidemiology",
-  "Education Reform", "Human Rights", "Social Justice", "Urban Planning", "Workforce Trends",
-  // Sports & Entertainment
-  "Formula 1", "Premier League", "NBA", "Tennis", "Golf",
-  "Streaming Wars", "Gaming Industry", "Music Trends", "Hollywood", "Art World",
-  // Local/Niche but Important
-  "Consumer Tech", "Privacy", "Infrastructure", "Transportation", "Logistics"
-];
-
-async function fetchFromGoogleNewsRSS(topic: string, settings: { country: string, language: string, ceid: string }): Promise<ArticleToProcess[]> {
-  try {
-    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=${settings.language}-${settings.country}&gl=${settings.country}&ceid=${settings.ceid}`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    
-    const xml = await res.text();
-    const $ = cheerio.load(xml, { xmlMode: true });
-    
-    const articles: ArticleToProcess[] = [];
-    $('item').each((_, el) => {
-      const title = $(el).find('title').text();
-      const link = $(el).find('link').text();
-      const pubDate = $(el).find('pubDate').text();
-      const sourceName = $(el).find('source').text() || "Google News";
-      
-      articles.push({
-        title,
-        url: link,
-        publishedAt: pubDate,
-        source: { name: sourceName, url: link }
-      });
-    });
-    return articles;
-  } catch (err) {
-    console.warn(`Google News RSS fetch failed for ${topic}:`, err);
-    return [];
-  }
-}
-
-interface ArticleContext {
-  id: string;
-  title: string;
-  description: string;
-  publishedAt: string | null;
-  clusterId: string;
-}
-
-// ── MODULE 6: PAIRWISE SIMILARITY SCORING ──
-function extractTokens(text: string): Set<string> {
-  const normalized = text.toLowerCase().replace(/[^\w\s]/g, "").trim();
-  const words = normalized.split(/\s+/).filter(w => w.length > 3);
-  const stopWords = new Set(["this", "that", "with", "from", "they", "will", "would", "could", "should", "what", "when", "where", "which", "there", "their", "have", "been", "were", "also", "into", "over", "after", "some", "them", "because", "about", "these", "only"]);
-  return new Set(words.filter(w => !stopWords.has(w)));
-}
-
-function extractEntities(title: string, description: string): Set<string> {
-  const text = `${title} ${description || ""}`;
-  // Simple heuristic: extract capitalized words as pseudo-entities
-  const matches = text.match(/\b[A-Z][a-z]+\b/g) || [];
-  return new Set(matches);
-}
-
-function calculateSimilarityScore(artNew: ArticleToProcess, artExisting: ArticleContext): { score: number, reasons: any } {
-  // 1. Title Token Jaccard (w = 0.40)
-  const tokensA = extractTokens(artNew.title);
-  const tokensB = extractTokens(artExisting.title);
-  const intersectionTokens = Array.from(tokensA).filter(t => tokensB.has(t)).length;
-  const unionTokens = new Set(Array.from(tokensA).concat(Array.from(tokensB))).size;
-  const titleJaccard = unionTokens > 0 ? intersectionTokens / unionTokens : 0;
-  
-  // 2. Entity Overlap (w = 0.40)
-  const entitiesA = extractEntities(artNew.title, artNew.description || "");
-  const entitiesB = extractEntities(artExisting.title, artExisting.description || "");
-  const intersectionEntities = Array.from(entitiesA).filter(e => entitiesB.has(e)).length;
-  const unionEntities = new Set(Array.from(entitiesA).concat(Array.from(entitiesB))).size;
-  const entityJaccard = unionEntities > 0 ? intersectionEntities / unionEntities : 0;
-  
-  // 3. Time Proximity Score (w = 0.20)
-  let timeScore = 0.5; // Default if no dates
-  if (artNew.publishedAt && artExisting.publishedAt) {
-    const tA = new Date(artNew.publishedAt).getTime();
-    const tB = new Date(artExisting.publishedAt).getTime();
-    if (!isNaN(tA) && !isNaN(tB)) {
-      const diffHours = Math.abs(tA - tB) / (1000 * 60 * 60);
-      timeScore = Math.max(0, 1 - (diffHours / 72));
-    }
-  }
-  
-  const w_t = 0.40;
-  const w_ent = 0.40;
-  const w_time = 0.20;
-  
-  const compositeScore = (w_t * titleJaccard) + (w_ent * entityJaccard) + (w_time * timeScore);
-  
-  return { 
-    score: compositeScore, 
-    reasons: { titleJaccard, entityJaccard, timeScore } 
-  };
-}
-
-// ── MODULE 7: CLUSTERING / STORY FORMATION ──
-function findCluster(art: ArticleToProcess, existingMap: Map<string, ArticleContext>): string | null {
-  let bestClusterId: string | null = null;
-  let highestScore = 0;
-  
-  for (const [id, existing] of Array.from(existingMap.entries())) {
-    if (art.title === existing.title) return existing.clusterId;
-    
-    // Fallback for short identical titles
-    const normA = art.title.toLowerCase().replace(/[^\w\s]/g, "").trim();
-    const normB = existing.title.toLowerCase().replace(/[^\w\s]/g, "").trim();
-    if (normA.length > 15 && (normA.includes(normB) || normB.includes(normA))) {
-       return existing.clusterId; 
-    }
-    
-    const { score } = calculateSimilarityScore(art, existing);
-    if (score > highestScore) {
-      highestScore = score;
-      bestClusterId = existing.clusterId;
-    }
-  }
-  
-  // Threshold: S >= 0.18 (Lowered to ensure 50+ sources per trending topic)
-  if (highestScore >= 0.18) {
-    return bestClusterId;
-  }
-  
-  return null;
-}
-
-interface ArticleToProcess {
-  title: string;
-  description?: string;
-  content?: string;
-  url: string;
-  image?: string;
-  publishedAt: string;
-  source: {
-    name: string;
-    url?: string;
-  };
-}
-
-async function processArticle(
-  art: ArticleToProcess, 
-  catMap: Record<string, string>,
-  systemUser: any,
-  publisherArticles: Map<string, Set<string>>,
-  existingGroups: Map<string, ArticleContext>
-): Promise<string | null> {
-  if (!art.title || art.title === "[Removed]") return null;
-        
-  const pubInfo = lookupPublisherInfo(art.source.name, art.source.url);
-  const pubSlug = slugify(art.source.name);
-  
-  let publisher = (await storage.listPublishers()).find(p => p.slug === pubSlug);
-  if (!publisher) {
-    publisher = await storage.createPublisher({
-      name: art.source.name,
-      slug: pubSlug,
-      description: `News source: ${art.source.name}`,
-      logoUrl: null,
-      website: art.source.url || null,
-      biasRating: pubInfo.bias,
-      factualityRating: pubInfo.factuality,
-      ownerName: pubInfo.ownerName,
-      ownerType: pubInfo.ownerType,
-      country: "US", // Default for now
-      language: "en", // Default for now
-    });
-  }
-  
-  // Check if THIS publisher already added THIS exact story
-  const existingPubArticles = publisherArticles.get(publisher.id);
-  if (existingPubArticles && Array.from(existingPubArticles).some(title => {
-    const words1 = new Set(title.toLowerCase().split(/\s+/));
-    const words2 = new Set(art.title.toLowerCase().split(/\s+/));
-    const intersection = Array.from(words1).filter(w => words2.has(w)).length;
-    return (intersection / Math.max(words1.size, words2.size)) > 0.7; 
-  })) {
-    return null; 
-  }
-  
-  const clusterId = findCluster(art, existingGroups);
-  const groupId = clusterId || (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(7));
-  
-  const categorySlug = guessCategory(art.title, art.description);
-  const categoryId = catMap[categorySlug] || catMap["politics"];
-  const articleSlug = slugify(art.title) + "-" + Date.now().toString(36);
-  const articleId = crypto.createHash('md5').update(art.url + art.title).digest('hex');
-  
-  const created = await storage.createArticle({
-    id: articleId,
-    publisherId: publisher.id,
-    authorId: systemUser.id,
-    title: art.title,
-    slug: articleSlug,
-    excerpt: art.description || art.title,
-    bodyHtml: `<p>${art.description || ""}</p><p>${art.content || ""}</p><p><a href="${art.url}" target="_blank" rel="noopener">Read full article at ${art.source.name} →</a></p>`,
-    heroImageUrl: art.image || getFallbackImage(categorySlug),
-    sourceUrl: art.url,
-    status: "published",
-    bias: pubInfo.bias,
-    clusterId: clusterId || ((crypto as any).randomUUID ? (crypto as any).randomUUID() : Math.random().toString(36).substring(7)),
-    importanceScore: 0,
-    biasHistory: [],
-    aiInsights: [], // Will be populated by synthesizer
-  }, categoryId ? [categoryId] : [], []);
-  
-  await storage.publishArticle(created.id);
-  existingGroups.set(created.id, {
-    id: created.id,
-    title: art.title,
-    description: art.description || "",
-    publishedAt: art.publishedAt || new Date().toISOString(),
-    clusterId: created.clusterId || created.id
-  });
-  
-  // Initialize bias history for this article
-  const biasValue = pubInfo.bias || "center";
-  await storage.updateArticle(created.id, {
-    biasHistory: [{
-      timestamp: new Date().toISOString(),
-      left: biasValue === "left" ? 1 : 0,
-      center: biasValue === "center" ? 1 : 0,
-      right: biasValue === "right" ? 1 : 0
-    }]
-  });
-  
-  if (!publisherArticles.has(publisher.id)) {
-    publisherArticles.set(publisher.id, new Set());
-  }
-  publisherArticles.get(publisher.id)!.add(art.title);
-
-  return clusterId ? null : art.title; // Return title if it's a NEW cluster for deep search
-}
-
-function getFallbackImage(category: string): string {
-  const fallbacks: Record<string, string> = {
-    politics: "https://images.unsplash.com/photo-1540910419892-4a36d2c3266c?w=800&q=80",
-    technology: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&q=80",
-    business: "https://images.unsplash.com/photo-1444653614773-995cb1ef9efa?w=800&q=80",
-    health: "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?w=800&q=80",
-    sports: "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=800&q=80",
-    world: "https://images.unsplash.com/photo-1521295121783-8a321d551ad2?w=800&q=80",
-  };
-  return fallbacks[category] || fallbacks.politics;
+  console.log("[Fetcher] Admin config updated:", adminFetcherConfig);
+  return adminFetcherConfig;
 }
 
 /**
- * Ground AI Smart Summary
- * Synthesizes 5 unique insight points from a cluster, representing 
- * multiple perspectives (Left, Center, Right) where available.
+ * Helper to process a specific set of sources sequentially (by chunk).
  */
-async function generateSmartSummary(clusterId: string) {
-  const { articles: articlesInGroup } = await storage.listArticles({ clusterId, status: "published" });
-  
-  if (articlesInGroup.length < 2) return;
-
-  const perspectives = {
-    left: articlesInGroup.filter(a => a.bias === "left"),
-    center: articlesInGroup.filter(a => a.bias === "center"),
-    right: articlesInGroup.filter(a => a.bias === "right")
-  };
-
-  const candidateSentences: { text: string, bias: string }[] = [];
-  articlesInGroup.forEach(art => {
-    const text = `${art.title}. ${art.excerpt || ""}`;
-    const parts = text.split(/[.!?]\s+/);
-    parts.forEach(p => {
-      const clean = p.trim().replace(/^["']|["']$/g, "");
-      if (clean.length > 50 && clean.length < 200 && !clean.toLowerCase().includes("subscribe") && !clean.toLowerCase().includes("click here")) {
-        candidateSentences.push({ text: clean, bias: art.bias });
-      }
-    });
-  });
-
-  // Ranking & Selection Strategy: 1 Left, 1 Right, 1 Center, 2 General
-  const finalInsights: { text: string, bias: string }[] = [];
-  
-  const selectOne = (bias: string) => {
-    const pool = candidateSentences.filter(s => s.bias === bias);
-    if (pool.length > 0) {
-      // Pick longest (usually most descriptive)
-      const best = pool.sort((a,b) => b.text.length - a.text.length)[0];
-      if (!isRedundant(best.text, finalInsights.map(f => f.text))) {
-        finalInsights.push(best);
-      }
-    }
-  };
-
-  const isRedundant = (s: string, existing: string[]) => {
-    return existing.some(e => {
-      const w1 = new Set(e.toLowerCase().split(/\s+/));
-      const w2 = new Set(s.toLowerCase().split(/\s+/));
-      const intersect = Array.from(w1).filter(w => w2.has(w)).length;
-      return (intersect / Math.min(w1.size, w2.size)) > 0.45;
-    });
-  };
-
-  selectOne("left");
-  selectOne("right");
-  selectOne("center");
-
-  // Fill up to 5 points with most descriptive remaining sentences
-  const remaining = candidateSentences
-    .filter(s => !finalInsights.some(f => f.text === s.text))
-    .sort((a,b) => b.text.length - a.text.length);
-
-  for (const s of remaining) {
-    if (finalInsights.length >= 5) break;
-    if (!isRedundant(s.text, finalInsights.map(f => f.text))) {
-      finalInsights.push(s);
-    }
+async function processSourceBatch(
+  sources: any[],
+  catMap: Record<string, string>,
+  systemUserId: string,
+  biasTier: string
+): Promise<number> {
+  if (sources.length === 0) {
+    console.log(`[Fetcher] ${biasTier}: No sources to fetch.`);
+    return 0;
   }
 
-  // Formatting with bias markers if possible
-  const formattedInsights = finalInsights.map(f => f.text);
+  const minQuality = QUALITY_GATES[biasTier] || 60;
+  console.log(`[Fetcher] >>> STARTING ${biasTier} (Gate: ${minQuality}, ${sources.length} sources)`);
+  if (biasTier === "pro_opposition" || biasTier === "TIER-1") recordFetchStart();
+  let enqueuedBatch = 0;
+  const CONCURRENCY_LIMIT = 5;
 
-  for (const art of articlesInGroup) {
-    await storage.updateArticle(art.id, { aiInsights: formattedInsights });
-  }
-}
+  for (let i = 0; i < sources.length; i += CONCURRENCY_LIMIT) {
+    const chunk = sources.slice(i, i + CONCURRENCY_LIMIT);
 
-export async function fetchRealNews(): Promise<number> {
-  console.log("Starting MASSIVE news fetch (20k scale initialization)...");
-  
-  let systemUser = await storage.getUserByEmail("system@modernnews.com") || 
-                     await storage.getUserByEmail("system@newshub.com") ||
-                     await storage.getUserByEmail("admin@newshub.com");
-                     
-  if (!systemUser) {
-    // Fallback to ANY user if none of the above exist
-    const { users } = await (storage as any).listUsers ? await (storage as any).listUsers() : { users: [] };
-    if (users && users.length > 0) {
-      systemUser = users[0];
-    } else {
-      console.error("[news-fetcher] FATAL: No users exist in DB to author fetched articles.");
-      return 0;
-    }
-  }
-
-  const categories = await storage.listCategories();
-  const catMap: Record<string, string> = {};
-  categories.forEach(c => catMap[c.slug] = c.id);
-
-  const existing = await storage.listArticles({ limit: 2000, offset: 0, status: "published" });
-  const existingGroups = new Map<string, ArticleContext>();
-  const publisherArticles = new Map<string, Set<string>>();
-  
-  existing.articles.forEach(a => {
-    const clusterId = a.clusterId || a.id;
-    existingGroups.set(a.id, {
-      id: a.id, title: a.title, description: a.excerpt || "", 
-      publishedAt: a.publishedAt?.toISOString() || null, clusterId
-    });
-    if (!publisherArticles.has(a.publisherId)) publisherArticles.set(a.publisherId, new Set());
-    publisherArticles.get(a.publisherId)!.add(a.title);
-  });
-
-  const CONCURRENCY_LIMIT = 20; // Increased for enterprise scale
-  const sourceChunks: any[][] = [];
-  for (let i = 0; i < RSS_SOURCES.length; i += CONCURRENCY_LIMIT) {
-    sourceChunks.push(RSS_SOURCES.slice(i, i + CONCURRENCY_LIMIT));
-  }
-
-  let articlesAdded = 0;
-  for (const chunk of sourceChunks) {
-    await Promise.all(chunk.map(async (source) => {
+    await Promise.all(chunk.map(async (source, index) => {
+      let sourceStart = Date.now();
+      let sourceEnqueued = 0;
       try {
-        const feed = await parser.parseURL(source.url);
-        // Process up to 50 items per feed for high density
-        for (const item of feed.items.slice(0, 50)) {
-          const result = await processArticle({
-            title: item.title || "",
-            description: item.contentSnippet || (item as any).description || "",
-            url: item.link || "",
-            image: item.enclosure?.url || (item as any).media?.["$"]?.url || null,
-            publishedAt: item.pubDate || new Date().toISOString(),
-            source: { name: source.publisherName, url: source.url }
-          }, catMap, systemUser, publisherArticles, existingGroups);
-          
-          if (result) {
-            articlesAdded++;
+        await new Promise(resolve => setTimeout(resolve, index * 800));
+        sourceStart = Date.now();
+        console.log(`[Fetcher] [${biasTier}] Processing ${source.name}...`);
+        const slug = source.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        const pub = await storage.getPublisherBySlug(slug);
+
+        if (pub) {
+          const lastFetchedAt = pub.lastFetchedAt ? new Date(pub.lastFetchedAt).getTime() : 0;
+          const minsSinceFetch = (Date.now() - lastFetchedAt) / 60000;
+
+          // T1 (Quality >= 90): 15 min | T2 (75-89): 30 min | T3 (<75): 60 min
+          // Accelerated for 20+ source clustering goal.
+          const tierInterval = source.quality >= 90 ? 15 : (source.quality >= 75 ? 30 : 60);
+
+          if (minsSinceFetch < tierInterval) {
+            console.log(`[Fetcher] [Tiering] SKIP ${source.name} (Quality ${source.quality}) — fetched ${Math.round(minsSinceFetch)}m ago, interval is ${tierInterval}m`);
+            return;
           }
         }
+
+        const headers: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+        };
+
+        // ── DIMENSION 7: CONDITIONAL GET (ETags) ──
+        if (pub?.lastEtag) headers['If-None-Match'] = pub.lastEtag;
+        if (pub?.lastModified) headers['If-Modified-Since'] = pub.lastModified;
+
+        // ── Retry-wrapped fetch ──
+        const response = await fetchWithRetry(source.url!, headers, source.name);
+
+        if (response.status === 304) {
+          console.log(`[Fetcher] [ConditionalGet] 304 Not Modified for ${source.name}. Skipping.`);
+          if (pub) {
+            await db.update(publishersTable).set({ lastFetchedAt: new Date() }).where(eq(publishersTable.id, pub.id));
+          }
+          return;
+        }
+
+        const newEtag = response.headers.get('etag');
+        const newLastModified = response.headers.get('last-modified');
+
+        const xml = await response.text();
+        const feed = await parser.parseString(xml);
+
+        // Update publisher fetch metadata
+        if (pub) {
+          await db.update(publishersTable).set({
+            lastFetchedAt: new Date(),
+            lastEtag: newEtag,
+            lastModified: newLastModified
+          }).where(eq(publishersTable.id, pub.id));
+        }
+
+        const validArticles: any[] = [];
+
+        for (const item of feed.items.slice(0, 30)) {
+          const url = item.link || item.guid || "";
+          if (!url || (url.endsWith('.html') && url.includes('/device/rss'))) continue;
+
+          const pubDate = new Date(item.pubDate || "");
+          if (!isNaN(pubDate.getTime()) && Date.now() - pubDate.getTime() > 5 * 24 * 60 * 60 * 1000) {
+            continue;
+          }
+
+          // ── PRE-INGESTION QUALITY GATE ──
+          const articleTitle = item.title || "";
+          const articleDesc = item.contentSnippet || (item as any).description || "";
+          const verdict = preIngestQualityGate(
+            articleTitle,
+            articleDesc,
+            url,
+            item.pubDate,
+            source.quality,
+            totalArticlesEnqueued < 50
+          );
+
+          if (!verdict.pass) {
+            if (sourceEnqueued === 0 || Math.random() < 0.1) {
+              console.log(formatRejection(articleTitle, source.name, verdict));
+            }
+            continue;
+          }
+
+          let domain = "";
+          try {
+            domain = new URL(url).hostname.replace('www.', '');
+          } catch (e) {
+            domain = "unknown";
+          }
+
+          const articleData: any = {
+            title: item.title || "",
+            description: item.contentSnippet || (item as any).description || "",
+            url: url,
+            domain: domain,
+            image: item.enclosure?.url || (item as any).media?.["$"]?.url || null,
+            publishedAt: item.pubDate || new Date().toISOString(),
+            source: { name: source.name, url: source.url! },
+            embedding: undefined,
+            trace: {
+              fetched: new Date().toISOString(),
+              bias_tier: biasTier,
+              publisher_quality: source.quality,
+              publisher_warning: source.warning
+            }
+          };
+
+          // --- DEDUP TIER 1: URL Hash ---
+          const normUrl = normalizeUrl(url);
+          const urlHash = createHash("sha256").update(normUrl).digest("hex");
+          if (PROCESSED_URL_HASHES.has(urlHash)) continue;
+
+          // --- DEDUP TIER 2: Title Shingle ---
+          const domainTitleKey = `${domain}:${articleData.title}`;
+          if (PROCESSED_TITLE_SHINGLES.has(domainTitleKey)) continue;
+
+          // --- DEDUP TIER 3: Database URL check ---
+          try {
+            const existingInDb = await db.select({ id: articles.id })
+              .from(articles)
+              .where(eq(articles.url, url))
+              .limit(1);
+            if (existingInDb && existingInDb.length > 0) {
+              PROCESSED_URL_HASHES.add(urlHash);
+              continue;
+            }
+          } catch (e) {
+            console.error(`[Fetcher] DB Dedup check failed for ${url}:`, e);
+          }
+
+          validArticles.push(articleData);
+        }
+
+        if (validArticles.length > 0) {
+          // --- DEDUP TIER 4: E5 Semantic (BATCHED API call) ---
+          const vectors = await embeddingService.embedBatch(
+            validArticles.map(a => a.title + ". " + (a.description || ""))
+          );
+
+          for (let i = 0; i < validArticles.length; i++) {
+            const articleData = validArticles[i];
+            const vector = vectors[i];
+
+            if (vector) {
+              articleData.embedding = vector;
+              try {
+                const dupCheck = await embeddingService.isDuplicateWithVector(vector, articleData.domain);
+                if (dupCheck.is_duplicate) {
+                  if (dupCheck.duplicate_of_domain === articleData.domain || !articleData.domain || articleData.domain === "unknown") {
+                    continue;
+                  }
+                }
+              } catch (_e) { }
+            }
+
+            const normUrlForHash = normalizeUrl(articleData.url);
+            const urlHash = createHash("sha256").update(normUrlForHash).digest("hex");
+            const domainTitleKey = `${articleData.domain}:${articleData.title}`;
+            const currentShingles = getShingles(articleData.title);
+            PROCESSED_URL_HASHES.add(urlHash);
+            PROCESSED_TITLE_SHINGLES.set(domainTitleKey, currentShingles);
+
+            if (PROCESSED_URL_HASHES.size > MAX_CACHE_SIZE) {
+              const keys = [...PROCESSED_URL_HASHES].slice(0, 10000);
+              keys.forEach(k => PROCESSED_URL_HASHES.delete(k));
+            }
+            if (PROCESSED_TITLE_SHINGLES.size > MAX_CACHE_SIZE) {
+              const keys = [...PROCESSED_TITLE_SHINGLES.keys()].slice(0, 10000);
+              keys.forEach(k => PROCESSED_TITLE_SHINGLES.delete(k));
+            }
+
+            try {
+              await articleQueue.add("process-article", {
+                article: articleData,
+                catMap,
+                systemUserId
+              });
+              sourceEnqueued++;
+              enqueuedBatch++;
+              totalArticlesEnqueued++;
+            } catch (queueErr) {
+              const { processArticle } = await import("./processing");
+              await processArticle(articleData as any, catMap, systemUserId);
+              sourceEnqueued++;
+              enqueuedBatch++;
+              totalArticlesEnqueued++;
+            }
+          }
+        }
+
+        // ── SUCCESS: reset circuit breaker ──
+        await recordSourceSuccess(source.name);
+        recordFetchSource({ source: source.name, tier: 1, status: "ok", articlesEnqueued: sourceEnqueued, durationMs: Date.now() - sourceStart });
+        console.log(`[Fetcher] [${biasTier}] ✓ ${source.name} — ${sourceEnqueued} articles in ${Date.now() - sourceStart}ms`);
+
       } catch (err: any) {
-        console.warn(`[news-fetcher] Fetch failed for ${source.publisherName}:`, err.message);
+        const errorType = categoriseError(err);
+        console.warn(`[Fetcher] [${biasTier}] ✗ ${source.name} [${errorType}]: ${err.message}`);
+
+        // ── Circuit breaker: track failure ──
+        const circuitOpen = await recordSourceFailure(source.name, source.quality);
+        if (circuitOpen) {
+          console.warn(`[Fetcher] [CircuitBreaker] ${source.name} will be skipped in future cycles until re-enabled.`);
+        }
+
+        recordFetchSource({ source: source.name, tier: 1, status: "failed", articlesEnqueued: 0, errorMessage: `[${errorType}] ${err.message}`, durationMs: Date.now() - sourceStart });
       }
     }));
   }
 
-  // Get all unique active clusterIds to synthesize
-  const { articles: finalArticles } = await storage.listArticles({ limit: 10000, offset: 0, status: "published" });
-  const uniqueClusterIds = new Set(finalArticles.map(a => a.clusterId).filter(Boolean) as string[]);
-  
-  console.log(`Synthesizing Ground AI Insights for ${uniqueClusterIds.size} clusters...`);
-  for (const cid of Array.from(uniqueClusterIds)) {
-    await generateSmartSummary(cid);
-  }
-
-  await updateBiasSnapshots();
-  return articlesAdded;
+  console.log(`[Fetcher] <<< FINISHED ${biasTier}. Enqueued ${enqueuedBatch} articles.`);
+  return enqueuedBatch;
 }
 
-async function updateBiasSnapshots() {
-  console.log("[news-fetcher] Updating Narrative Shift snapshots...");
-  
-  // Get all articles from the last 72 hours (to capture the 48h shift)
-  const threeDaysAgo = new Date();
-  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-  
-  const { articles } = await storage.listArticles({ limit: 2000, offset: 0, status: "published" });
-  const recentArticles = articles.filter(a => new Date(a.createdAt) > threeDaysAgo && a.clusterId);
-  
-  // Group by clusterId
-  const groups = new Map<string, Article[]>();
-  recentArticles.forEach(a => {
-    if (!groups.has(a.clusterId!)) groups.set(a.clusterId!, []);
-    groups.get(a.clusterId!)!.push(a);
-  });
-  
-  const entries = Array.from(groups.entries());
-  for (const [groupId, groupArticles] of entries) {
-    // Calculate current distribution
-    const leftCount = groupArticles.filter(a => a.bias === "left").length;
-    const centerCount = groupArticles.filter(a => a.bias === "center").length;
-    const rightCount = groupArticles.filter(a => a.bias === "right").length;
-    
-    const snapshot = {
-      timestamp: new Date().toISOString(),
-      left: leftCount,
-      center: centerCount,
-      right: rightCount
-    };
-    
-    // Update each article in the group if it's been more than 6 hours since the last snapshot
-    for (const art of groupArticles) {
-      const history = (art.biasHistory as any[]) || [];
-      const lastSnapshot = history[history.length - 1];
-      
-      const shouldUpdate = !lastSnapshot || 
-        (new Date().getTime() - new Date(lastSnapshot.timestamp).getTime() > 6 * 60 * 60 * 1000);
-        
-      if (shouldUpdate) {
-        const newHistory = [...history, snapshot].slice(-10); // Keep last 10 snapshots
-        await storage.updateArticle(art.id, { biasHistory: newHistory });
-      }
-    }
+/**
+ * Main fetch cycle - Tiered sequential processing
+ */
+export async function fetchRealNews(): Promise<number> {
+  if (adminFetcherConfig.isPaused) return 0;
+
+  console.log("[Fetcher] STARTING BUCKETED FETCH CYCLE...");
+  lastFetchTime = new Date().toISOString();
+
+  // Prepare context
+  const categoriesList = await storage.listCategories();
+  const catMap: Record<string, string> = {};
+  categoriesList.forEach((c: any) => catMap[c.slug] = c.id);
+
+  const systemUser = await storage.getUserByEmail("system@modernnews.com") ||
+    await storage.getUserByEmail("system@newshub.com") ||
+    await storage.getUserByEmail("admin@newshub.com") ||
+    (await storage.listUsers())[0]; // Fallback to any user if seed failed
+
+  if (!systemUser) {
+    console.error("[Fetcher] FATAL: No users found in database. Run seed.ts first.");
+    return 0;
   }
-  console.log("[news-fetcher] Narrative Shift snapshots updated.");
+
+  let totalCycleEnqueued = 0;
+
+  // Process in QUALITY-FIRST order:
+  // 1. AGGREGATORS (AP, Reuters, BBC) — seed clusters with trusted wire sources
+  // 2. CENTER — neutral sources build the backbone
+  // 3. LEFT/RIGHT — attach viewpoints to existing clusters  
+  // 4. FAR_LEFT/FAR_RIGHT — niche perspectives (strictest quality gate)
+  for (const biasTier of Object.keys(RSS_SOURCES)) {
+    const sources = RSS_SOURCES[biasTier] || [];
+    // Sort sources within each tier by quality (highest first)
+    const sorted = [...sources].sort((a, b) => b.quality - a.quality);
+    totalCycleEnqueued += await processSourceBatch(sorted, catMap, systemUser.id, biasTier);
+  }
+
+  console.log(`[Fetcher] BUCKETED CYCLE COMPLETE. Total: ${totalCycleEnqueued} articles.`);
+
+  // Refresh homepage cache in background (Stale-while-revalidate)
+  try {
+    const { updateHomepageCache } = await import("./processing");
+    updateHomepageCache().catch(e => console.error("[Fetcher] Background cache refresh failed:", e));
+  } catch (e) {
+    console.error("[Fetcher] Failed to initiate cache refresh:", e);
+  }
+
+  return totalCycleEnqueued;
 }
 
-// Fetch interval: 15 minutes
-const FETCH_INTERVAL_MS = 15 * 60 * 1000;
-let fetchTimer: NodeJS.Timeout | null = null;
+function getAdaptiveInterval(): number {
+  const hour = new Date().getHours();
+  // Peak hours: morning (7-10 AM), afternoon (12-2 PM), and evening (7-11 PM)
+  const isPeak = (hour >= 7 && hour <= 10) || (hour >= 12 && hour <= 14) || (hour >= 19 && hour <= 23);
+  const isNight = hour >= 0 && hour <= 6;
+  if (isPeak) return 5 * 60 * 1000;  // 5 mins
+  if (isNight) return 60 * 60 * 1000; // 60 mins
+  return 15 * 60 * 1000;              // 15 mins (standard)
+}
+
+let fetchInterval: NodeJS.Timeout | null = null;
 
 export function startAutoFetch() {
-  // Always start auto-fetch now that we have RSS as a free fallback
-  console.log("[news-fetcher] Auto-fetch module starting...");
-  
-  // Initial fetch after 5 seconds (let server start first)
-  setTimeout(async () => {
-    try {
-      await fetchRealNews();
-    } catch (err) {
-      console.error("[news-fetcher] Initial fetch failed:", err);
-    }
-  }, 5000);
-  
-  // Schedule recurring fetches
-  fetchTimer = setInterval(async () => {
-    try {
-      await fetchRealNews();
-    } catch (err) {
-      console.error("[news-fetcher] Scheduled fetch failed:", err);
-    }
-  }, FETCH_INTERVAL_MS);
-  
-  console.log(`[news-fetcher] Auto-fetch enabled. Fetching every ${FETCH_INTERVAL_MS / 60000} minutes.`);
-  
-  // Queue Scheduler: Reset pending jobs every hour
-  setInterval(async () => {
-    console.log("[news-fetcher] Resetting fetch queue for next cycle...");
-    try {
-      await (storage as any).resetFetchQueue();
-    } catch (err) {
-      console.error("[news-fetcher] Failed to reset fetch queue:", err);
-    }
-  }, 60 * 60 * 1000);
+  if (fetchInterval) return;
+  console.log("[Fetcher] Auto-fetch started with Adaptive Timing.");
+
+  const run = async () => {
+    await fetchRealNews().catch(err => console.error("[Fetcher] Fetch failed:", err));
+    const next = getAdaptiveInterval();
+    console.log(`[Fetcher] Next adaptive fetch scheduled in ${next / 60000} minutes.`);
+    fetchInterval = setTimeout(run, next);
+  };
+  fetchInterval = setTimeout(run, 0); // run immediately
 }
 
 export function stopAutoFetch() {
-  if (fetchTimer) {
-    clearInterval(fetchTimer);
-    fetchTimer = null;
-    console.log("[news-fetcher] Auto-fetch stopped.");
+  if (fetchInterval) {
+    clearTimeout(fetchInterval);
+    fetchInterval = null;
+    console.log("[Fetcher] Auto-fetch stopped.");
   }
 }
+
+export function addCustomSource(source: { publisherName: string, url: string }) {
+  const newSource = {
+    ...source,
+    category: "general",
+    region: "US"
+  };
+  if (!RSS_SOURCES.center) RSS_SOURCES.center = [];
+  RSS_SOURCES.center.push(newSource as any);
+  console.log(`[Fetcher] Added custom source: ${source.publisherName}`);
+  // Fetch only this one source, not all sources
+  fetchSingleSource(newSource).catch(err =>
+    console.error("[Fetcher] Single source fetch failed:", err)
+  );
+}
+
+async function fetchSingleSource(source: any) {
+  const categories = await storage.listCategories();
+  const catMap: Record<string, string> = {};
+  categories.forEach((c: any) => catMap[c.slug] = c.id);
+  const systemUser = await storage.getUserByEmail("system@modernnews.com") ||
+    await storage.getUserByEmail("admin@newshub.com");
+  if (!systemUser) return;
+  await processSourceBatch([source], catMap, systemUser.id, "CUSTOM");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RECLUSTERING JOB — runs every 15 minutes
+// Finds solo articles (sourceCount=1) published in last 24h and
+// tries to match them to existing clusters or each other.
+// ─────────────────────────────────────────────────────────────────────────────
+export function startReclusteringJob() {
+  console.log("[Recluster] Job started. Runs every 2 minutes.");
+  setInterval(async () => {
+    try {
+      await runReclusteringPass();
+    } catch (err) {
+      console.error("[Recluster] Pass failed:", err);
+    }
+  }, 2 * 60 * 1000); // every 2 minutes
+}
+
+async function runReclusteringPass() {
+  const solo = await db.select({
+    id: articles.id,
+    title: articles.title,
+    excerpt: articles.excerpt,
+    clusterId: articles.clusterId,
+    sourceId: articles.sourceId,
+    publishedAt: articles.publishedAt,
+    url: articles.url,
+    sourceUrl: articles.sourceUrl,
+    embedding: sql<number[] | null>`ae.embedding`,
+    sourceCount: sql<number>`COALESCE(clusters.source_count, 1)`
+  })
+    .from(articles)
+    .leftJoin(sql`article_embeddings ae`, sql`ae.article_id = ${articles.id}`)
+    .leftJoin(clusters, eq(articles.clusterId, clusters.id))
+    .where(and(
+      eq(articles.status, "published"),
+      sql`${articles.visibilityState} IN ('visible', 'low_priority')`,
+      sql`COALESCE(clusters.source_count, 1) = 1`
+    ))
+    .orderBy(desc(articles.publishedAt))
+    .limit(1000);
+
+  if (solo.length === 0) return;
+
+  console.log(`[Recluster] Found ${solo.length} solo articles to re-examine...`);
+
+  const categories = await storage.listCategories();
+  const catMap: Record<string, string> = {};
+  categories.forEach((c: any) => catMap[c.slug] = c.id);
+
+  const systemUser = await storage.getUserByEmail("system@modernnews.com") ||
+    await storage.getUserByEmail("admin@newshub.com");
+  if (!systemUser) return;
+
+  const { extractKeywords, extractEntities, extractTopicFingerprint, calculateWeightedEntitySimilarity } = await import("./processing");
+
+  const candidates = await db.select({
+    id: articles.id,
+    title: articles.title,
+    excerpt: articles.excerpt,
+    clusterId: articles.clusterId,
+    sourceId: articles.sourceId,
+    publishedAt: articles.publishedAt,
+    url: articles.url,
+    sourceUrl: articles.sourceUrl,
+    embedding: sql<number[] | null>`ae.embedding`
+  })
+    .from(articles)
+    .leftJoin(sql`article_embeddings ae`, sql`ae.article_id = ${articles.id}`)
+    .where(and(eq(articles.status, "published"), sql`${articles.visibilityState} IN ('visible', 'low_priority')`))
+    .orderBy(desc(articles.publishedAt))
+    .limit(2000);
+
+  let merged = 0;
+  for (const article of solo) {
+    const artKeywords = extractKeywords(article.title);
+    const artEntities = extractEntities(article.title, article.excerpt || "");
+    const artPubTime = article.publishedAt ? new Date(article.publishedAt).getTime() : 0;
+
+    // Try to find a better cluster for this solo article
+
+    for (const candidate of candidates) {
+      if (candidate.id === article.id) continue;
+      if (candidate.clusterId === article.clusterId) continue;
+      if ((candidate.sourceCount || 1) < 2) continue; // only merge into real clusters
+
+      const candPubTime = candidate.publishedAt ? new Date(candidate.publishedAt).getTime() : 0;
+      const timeDiff = Math.abs(artPubTime - candPubTime) / (1000 * 60 * 60);
+      if (timeDiff > 168) continue; // 7 day window
+
+      const candKeywords = extractKeywords(candidate.title);
+      const candEntities = extractEntities(candidate.title, candidate.excerpt || "");
+
+      const entityScore = calculateWeightedEntitySimilarity(artEntities, candEntities);
+
+      const kwIntersect = Array.from(artKeywords).filter(w => candKeywords.has(w)).length;
+      const kwUnion = new Set([...artKeywords, ...candKeywords]).size;
+      const kwScore = kwUnion > 0 ? kwIntersect / kwUnion : 0;
+
+      const fingerA = extractTopicFingerprint(article.title, article.excerpt || "");
+      const fingerB = extractTopicFingerprint(candidate.title, candidate.excerpt || "");
+      const fpIntersect = Array.from(fingerA).filter(w => fingerB.has(w)).length;
+      const fpUnion = new Set([...fingerA, ...fingerB]).size;
+      const fpScore = fpUnion > 0 ? fpIntersect / fpUnion : 0;
+
+      // Recalibrated for better solo-article merging
+      const composite = (entityScore * 0.40) + (kwScore * 0.35) + (fpScore * 0.25);
+      let isMatch = composite >= 0.18;
+
+      // --- VECTOR E5 SEMANTIC FALLBACK ---
+      if (!isMatch && article.embedding && candidate.embedding) {
+        const { calculateCosineSimilarity } = await import("../shared/schema");
+        try {
+          const v1 = typeof article.embedding === 'string' ? JSON.parse(article.embedding as any) : article.embedding;
+          const v2 = typeof candidate.embedding === 'string' ? JSON.parse(candidate.embedding as any) : candidate.embedding;
+          const cosSim = calculateCosineSimilarity(v1, v2);
+          if (cosSim >= 0.82) {
+            isMatch = true;
+          }
+        } catch (e) { }
+      }
+
+      if (isMatch && candidate.clusterId) {
+        await storage.updateArticle(article.id, { clusterId: candidate.clusterId });
+        merged++;
+        console.log(`[Recluster] Merged "${article.title.substring(0, 40)}" → cluster ${candidate.clusterId.substring(0, 8)}`);
+        break;
+      }
+    }
+
+    // Small delay to not hammer the DB
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  if (merged > 0) {
+    console.log(`[Recluster] Pass complete. Merged ${merged} solo articles into existing clusters.`);
+  }
+}
+

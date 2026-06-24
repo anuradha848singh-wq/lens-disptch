@@ -1,174 +1,814 @@
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
+import { deriveBias } from "@/lib/bias-utils";
+import DOMPurify from "dompurify";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { MainNav } from "@/components/MainNav";
 import { NewsFooter } from "@/components/NewsFooter";
-import { BiasBar, BiasChip, PublisherAvatar, CoverageDetails } from "@/components/BiasBar";
-import { StoryCard } from "@/components/StoryCard";
+import { BiasChip } from "@/components/BiasBar";
+import { BiasSpectrumBar } from "@/components/BiasSpectrumBar";
+import { PublisherLogo } from "@/components/PublisherLogo";
+import { StoryImpactRings } from "@/components/StoryImpactRings";
+import { TrendsDonut, CoverageBarChart, MediaBiasDistribution } from "@/components/BiasCharts";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { format, formatDistanceToNow } from "date-fns";
-import { ArrowLeft, Bookmark, BookmarkCheck, Share2, Eye, ExternalLink, Lock, BookOpen, X, Sparkles, CheckCircle2, Scale } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import {
+  Bookmark, BookmarkCheck, Share2, ExternalLink,
+  FileText, Search, ChevronRight, CheckCircle2, Clock, Zap
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
-import { type ArticleWithDetails, type Category } from "@shared/schema";
-import { useMemo } from "react";
-import AutoPlay from "embla-carousel-autoplay";
-import useEmblaCarousel from "embla-carousel-react";
+import { type ArticleWithDetails } from "@shared/schema";
 
-// Source counts and bias are now computed dynamically from the /api/sources endpoint
 
-type SourceTab = "all" | "left" | "center" | "right";
+import { StoryOrigin, CoverageByCountry, DeepIntelligenceDashboard, StoryTimeline } from "@/components/StoryIntelligence";
+import { PerspectiveSlider, type BiasPerspective } from "@/components/PerspectiveSlider";
+import { ContextDiffPanel } from "@/components/ContextDiffPanel";
+import { ExecutiveBriefing, ForeignGazePanel, MarketImpact, EntityQuoteTracker } from "@/components/PremiumAIFeatures";
+import { useEffect } from "react";
+import { motion, useScroll, useSpring } from "framer-motion";
 
-function getSummaryPoints(article: ArticleWithDetails, sourcesTotal: number, dominantBias: string) {
-  const points = [
-    article.excerpt,
-    `This story is being reported by ${sourcesTotal} different news organizations across the political spectrum.`,
-    `The dominant coverage of this topic is currently ${dominantBias}.`,
-    `Sources are being updated in real-time as new reports are published.`,
-  ];
-  return points;
-}
-
-function NarrativeShift({ history }: { history: any[] }) {
-  if (!history || history.length < 2) return null;
+function ReadingProgressBar() {
+  const { scrollYProgress } = useScroll();
+  const scaleX = useSpring(scrollYProgress, {
+    stiffness: 100,
+    damping: 30,
+    restDelta: 0.001
+  });
 
   return (
-    <div className="bg-card border border-card-border rounded-xl p-4 overflow-hidden relative group">
+    <motion.div
+      className="fixed top-0 left-0 right-0 h-1 bg-accent-editorial origin-left z-50"
+      style={{ scaleX }}
+    />
+  );
+}
+// ── Bias dot ─────────────────────────────────────────────────────────────────
+function BiasDot({ bias }: { bias: string | null }) {
+  const color = bias === "left" ? "bg-blue-500"
+    : bias === "right" ? "bg-red-500"
+      : "bg-gray-400";
+  return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${color}`} />;
+}
+
+function TrendingTopicsSection({ category, currentId }: { category?: string; currentId?: string }) {
+  const [, setLocation] = useLocation();
+  const { data: trending = [] } = useQuery({
+    queryKey: ["/api/articles/trending", category],
+    queryFn: () => api.articles.trending(10),
+    staleTime: 60000,
+  });
+
+  const filtered = trending
+    .filter((a: any) => a.id !== currentId)
+    .slice(0, 4);
+
+  if (filtered.length === 0) return null;
+
+  return (
+    <section>
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-xs font-black uppercase tracking-widest text-primary flex items-center gap-2">
-          Narrative Shift
-          <Sparkles className="w-3 h-3 fill-primary text-primary" />
-        </h3>
-        <span className="text-[9px] font-bold text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">48h Timeline</span>
+        <div>
+          <h3 className="text-lg font-bold text-foreground">Trending right now</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Top stories gaining sources across the web</p>
+        </div>
       </div>
-      
-      <div className="relative h-24 flex items-end gap-1 px-1">
-        {history.map((snapshot, i) => {
-          const total = snapshot.left + snapshot.center + snapshot.right || 1;
-          const lHeight = (snapshot.left / total) * 100;
-          const cHeight = (snapshot.center / total) * 100;
-          const rHeight = (snapshot.right / total) * 100;
-          
-          return (
-            <div key={i} className="flex-1 flex flex-col h-full justify-end group/col relative">
-              <div className="w-full bg-red-500/80 transition-all duration-500" style={{ height: `${rHeight}%` }} />
-              <div className="w-full bg-zinc-400 dark:bg-zinc-600 transition-all duration-500" style={{ height: `${cHeight}%` }} />
-              <div className="w-full bg-blue-500/80 transition-all duration-500" style={{ height: `${lHeight}%` }} />
-              <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover/col:opacity-100 transition-opacity whitespace-nowrap z-20">
-                 <span className="text-[8px] bg-popover border px-1 rounded shadow-sm">
-                   {format(new Date(snapshot.timestamp), "HH:mm")}
-                 </span>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {filtered.map((a: any) => (
+          <div key={a.id}
+            className="bg-card border border-border hover:border-primary/30 rounded-xl p-4 cursor-pointer transition-colors flex gap-3"
+            onClick={() => setLocation(`/article/${a.id}`)}>
+            {a.heroImageUrl && !a.heroImageUrl.includes("placeholder") && (
+              <img src={a.heroImageUrl} alt={a.title} className="w-16 h-16 object-cover rounded-lg flex-shrink-0" loading="lazy" />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-1">
+                <BiasChip bias={(a.bias || "center") as any} size="xs" />
+                {(a.sourceCount || 1) > 1 && (
+                  <span className="text-xs font-bold text-blue-600">{a.sourceCount} sources</span>
+                )}
+                {a.storyPhase === "breaking" && (
+                  <span className="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">Breaking</span>
+                )}
               </div>
+              <h4 className="text-sm font-bold leading-snug text-foreground line-clamp-2">{a.title}</h4>
+              <p className="text-xs text-muted-foreground mt-1">{a.publisher?.name}</p>
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
-      
-      <div className="flex justify-between mt-2 text-[9px] font-bold text-muted-foreground uppercase tracking-tighter">
-        <span>Start</span>
-        <span>Today</span>
-      </div>
-      
-      <p className="text-[10px] text-muted-foreground mt-4 leading-relaxed italic">
-        This timeline tracks how the balance of coverage has shifted as more publishers joined the story. 
+    </section>
+  );
+}
+
+function YourViewpointSection({ relatedArticles, excludeIds = new Set<string>() }: { relatedArticles: any[]; excludeIds?: Set<string> }) {
+  const [, setLocation] = useLocation();
+  const { data: myBias } = useQuery({
+    queryKey: ["/api/my-bias"],
+    queryFn: () => fetch("/api/my-bias", { credentials: "include" }).then(r => r.json()),
+    retry: false,
+  });
+
+  // Filter out articles already shown in "Same story" section above
+  const available = relatedArticles.filter(a => !excludeIds.has(a.id));
+
+  // myBias.overallLean does NOT exist in MyBiasStats schema.
+  // Derive the user lean from the actual percentage fields.
+  const leftPct   = myBias?.proEstablishmentPercent   ?? 0;
+  const centerPct = myBias?.neutralPercent ?? 0;
+  const rightPct  = myBias?.proOppositionPercent  ?? 0;
+  const userLean: "left" | "center" | "right" =
+    myBias && (leftPct > 0 || centerPct > 0 || rightPct > 0)
+      ? leftPct > rightPct && leftPct > centerPct
+        ? "left"
+        : rightPct > leftPct && rightPct > centerPct
+        ? "right"
+        : "center"
+      : "center";
+
+  if (!myBias || (leftPct === 0 && centerPct === 0 && rightPct === 0)) {
+    return (
+      <section className="bg-secondary/30 border border-dashed border-border rounded-2xl p-8 text-center">
+        <h3 className="text-base font-bold text-foreground mb-2">Your viewpoint</h3>
+        <p className="text-sm text-muted-foreground">
+          Log in to see how this story compares to your reading habits.
+        </p>
+      </section>
+    );
+  }
+
+  if (!available.length) return null;
+
+  const oppositeBias = userLean === "left" ? "right"
+    : userLean === "right" ? "left"
+      : null;
+
+  const oppositeArticles = oppositeBias
+    ? available.filter(a => deriveBias(a) === oppositeBias)
+    : [];
+
+  const myBiasArticles = available.filter(a => deriveBias(a) === userLean);
+
+  if (oppositeArticles.length === 0 && myBiasArticles.length === 0) return null;
+
+  return (
+    <section className="bg-card border border-border rounded-2xl p-6">
+      <h3 className="text-lg font-bold text-foreground mb-1">Your viewpoint</h3>
+      <p className="text-xs text-muted-foreground mb-5">
+        Based on your reading history, you tend to read{" "}
+        <span className={`font-bold ${userLean === "left" ? "text-blue-600" : userLean === "right" ? "text-red-600" : "text-green-600"}`}>
+          {userLean}
+        </span>-leaning sources.
       </p>
+
+      <div className="space-y-5">
+        {myBiasArticles.length > 0 && (
+          <div>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">
+              From sources you normally read
+            </p>
+            <div className="space-y-2">
+              {myBiasArticles.slice(0, 2).map(a => (
+                <div key={a.id}
+                  className="flex items-start gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => setLocation(`/article/${a.id}`)}>
+                  <PublisherLogo name={a.publisher?.name || "?"} domain={a.publisher?.website} size="xs" />
+                  <div>
+                    <p className="text-xs font-bold text-foreground line-clamp-2">{a.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{a.publisher?.name}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {oppositeArticles.length > 0 && (
+          <div>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">
+              Step outside your bubble — {oppositeBias} sources say
+            </p>
+            <div className="space-y-2">
+              {oppositeArticles.slice(0, 2).map(a => (
+                <div key={a.id}
+                  className="flex items-start gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => setLocation(`/article/${a.id}`)}>
+                  <PublisherLogo name={a.publisher?.name || "?"} domain={a.publisher?.website} size="xs" />
+                  <div>
+                    <p className="text-xs font-bold text-foreground line-clamp-2">{a.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{a.publisher?.name}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ── Bias Distribution with publisher columns ──────────────────────────────
+function CoverageDetailsCard({ biasStats, sources }: { biasStats: any, sources: any[] }) {
+  const { lastUpdated, cp, shannonDiversity } = useMemo(() => {
+    const last = sources.reduce((latest, s) => {
+      const t = new Date(s.publishedAt || 0).getTime();
+      return t > latest ? t : latest;
+    }, 0);
+
+    const centerPercentage = Math.round((biasStats.center / (biasStats.total || 1)) * 100);
+
+    const { left, center, right, total } = biasStats;
+    if (total === 0) return { lastUpdated: last, cp: centerPercentage, shannonDiversity: 0 };
+    let result = 0;
+    [left, center, right].forEach(count => {
+      if (count > 0) {
+        let p = count / total;
+        result -= p * Math.log(p);
+      }
+    });
+    const sdi = Number(((result / Math.log(3)) * 100).toFixed(1));
+
+    return { lastUpdated: last, cp: centerPercentage, shannonDiversity: sdi };
+  }, [biasStats, sources]);
+
+  return (
+    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-secondary/30">
+        <span className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+          Coverage Details
+        </span>
+      </div>
+      <div className="p-4 space-y-2.5">
+        {[
+          { label: "Total News Sources", value: biasStats.total, color: null },
+          { label: "Leaning Left", value: biasStats.left, color: "text-blue-600" },
+          { label: "Leaning Right", value: biasStats.right, color: "text-red-600" },
+          { label: "Center", value: biasStats.center, color: "text-gray-600" },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="flex justify-between items-center">
+            <span className="text-xs text-muted-foreground">{label}</span>
+            <span className={`text-sm font-bold ${color || "text-foreground"}`}>{value}</span>
+          </div>
+        ))}
+        {lastUpdated > 0 && (
+          <div className="flex justify-between items-center pt-2 border-t border-border">
+            <span className="text-sm text-muted-foreground">Last Updated</span>
+            <span className="text-sm text-foreground font-medium">
+              {formatDistanceToNow(new Date(lastUpdated))} ago
+            </span>
+          </div>
+        )}
+        <div className="flex justify-between items-center">
+          <span className="text-sm text-muted-foreground">Bias Distribution</span>
+          <span className="text-sm font-bold text-foreground">{cp || 0}% Center</span>
+        </div>
+        <div className="flex justify-between items-center pt-2 border-t border-border">
+          <span className="text-sm text-muted-foreground">Shannon Diversity</span>
+          <span className={`text-sm font-bold ${shannonDiversity > 70 ? 'text-green-600' : shannonDiversity > 40 ? 'text-amber-600' : 'text-accent-editorial'}`}>
+            {shannonDiversity}%
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
 
+function BiasDistributionColumns({ sources }: { sources: any[] }) {
+  if (!sources.length) return null;
+
+  const { left, center, right, untracked, cp, total } = useMemo(() => {
+    const l = sources.filter(s => deriveBias(s) === "left");
+    const c = sources.filter(s => deriveBias(s) === "center");
+    const r = sources.filter(s => deriveBias(s) === "right");
+    const u = sources.filter(s => !s.bias && !s.publisher?.biasRating);
+
+    const totalCount = sources.length || 1;
+    const lp = Math.round((l.length / totalCount) * 100);
+    const rp = Math.round((r.length / totalCount) * 100);
+    const centerPercentage = 100 - lp - rp;
+
+    return { left: l, center: c, right: r, untracked: u, cp: centerPercentage, total: totalCount };
+  }, [sources]);
+
+  const MAX_SHOWN = 5;
+
+  const LogoCol = ({ items, color, label }: { items: any[]; color: string; label: string }) => {
+    const bg = color === "left" ? "bg-blue-100 text-blue-800"
+      : color === "right" ? "bg-red-100 text-red-800"
+        : "bg-gray-100 text-gray-700";
+    const hdrBg = color === "left" ? "bg-blue-50 text-blue-700"
+      : color === "right" ? "bg-red-50 text-red-700"
+        : "bg-gray-50 text-gray-700";
+    const shown = items.slice(0, MAX_SHOWN);
+    const extra = items.length - MAX_SHOWN;
+    return (
+      <div className="flex flex-col items-center gap-1 flex-1">
+        <span className={`text-xs font-bold px-2 py-1 rounded-md w-full text-center ${hdrBg}`}>
+          {label}
+        </span>
+        {shown.map((s, i) => (
+          <PublisherLogo key={i}
+            name={s.publisher?.name || "?"}
+            domain={s.publisher?.website}
+            size="sm"
+            className="border-2 border-background"
+          />
+        ))}
+        {extra > 0 && (
+          <div className="w-7 h-7 rounded-full bg-secondary border border-border flex items-center justify-center text-xs font-bold text-muted-foreground">
+            +{extra}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-secondary/30 flex items-center justify-between">
+        <span className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+          Bias distribution
+        </span>
+        <span className="text-sm text-muted-foreground">
+          {cp}% of sources are Center
+        </span>
+      </div>
+      <div className="p-4">
+        {/* Spectrum bar */}
+        <div className="mb-4">
+          <BiasSpectrumBar 
+            proEstablishmentCount={left.length} 
+            neutralCount={center.length} 
+            proOppositionCount={right.length} 
+            totalStats={total} 
+            className="h-2.5" 
+          />
+        </div>
+
+        {/* Publisher columns */}
+        <div className="grid grid-cols-3 gap-2">
+          <LogoCol items={left} color="left" label="Left" />
+          <LogoCol items={center} color="center" label="Center" />
+          <LogoCol items={right} color="right" label="Right" />
+        </div>
+
+        {/* Untracked */}
+        {untracked.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-border">
+            <div className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">
+              Untracked bias
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {untracked.slice(0, 6).map((s, i) => (
+                <PublisherLogo key={i}
+                  name={s.publisher?.name || "?"}
+                  domain={s.publisher?.website}
+                  size="xs"
+                />
+              ))}
+              {untracked.length > 6 && (
+                <div className="w-5 h-5 rounded-full bg-secondary border border-border flex items-center justify-center text-[8px] font-bold text-muted-foreground">
+                  +{untracked.length - 6}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Who broke this story ──────────────────────────────────────────────────
+function WhoBrokeStory({ sources }: { sources: any[] }) {
+  if (!sources.length) return null;
+
+  const data = useMemo(() => {
+    const sorted = [...sources].sort((a, b) =>
+      new Date(a.publishedAt || 0).getTime() - new Date(b.publishedAt || 0).getTime()
+    );
+    const first = sorted[0];
+    if (!first) return null;
+
+    const bias = first.bias || first.publisher?.biasRating?.toLowerCase() || "center";
+    const followTime = sorted.length > 1
+      ? Math.round((new Date(sorted[sorted.length - 1].publishedAt).getTime() -
+        new Date(sorted[0].publishedAt).getTime()) / (1000 * 60 * 60))
+      : null;
+
+    const dominantBias = sources.filter(s =>
+      (s.bias || s.publisher?.biasRating || "").toLowerCase().includes("left")).length >
+      sources.filter(s =>
+        (s.bias || s.publisher?.biasRating || "").toLowerCase().includes("right")).length
+      ? "left" : "right";
+
+    const uniqueFollowers = new Set(
+      sorted.slice(1).map(a => a.sourceId || a.publisher?.id)
+    ).size;
+
+    return { first, bias, followTime, dominantBias, uniqueFollowers };
+  }, [sources]);
+
+  if (!data) return null;
+  const { first, bias, followTime, dominantBias, uniqueFollowers } = data;
+
+  return (
+    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-secondary/30">
+        <span className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+          Who broke this story
+        </span>
+      </div>
+      <div className="flex items-center gap-3 p-4 border-b border-border bg-secondary/20">
+        <PublisherLogo
+          name={first.publisher?.name || "?"}
+          domain={first.publisher?.website}
+          size="md"
+        />
+        <div>
+          <div className="text-sm font-bold text-foreground">
+            {first.publisher?.name}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            First reported · {formatDistanceToNow(new Date(first.publishedAt || Date.now()))} ago
+          </div>
+          <BiasChip bias={bias as any} size="xs" />
+        </div>
+      </div>
+      <div className="p-4 text-sm text-muted-foreground leading-relaxed">
+        {uniqueFollowers > 0 ? (
+          <>
+            <span className="font-bold text-foreground">{uniqueFollowers} sources</span>
+            {" "}followed within{" "}
+            {followTime !== null ? `${followTime} hour${followTime !== 1 ? "s" : ""}` : "a few hours"}.
+            Story gained most traction in{" "}
+            <span className={`font-bold ${dominantBias === "left" ? "text-blue-600" : "text-red-600"}`}>
+              {dominantBias}-leaning
+            </span>
+            {" "}outlets.
+          </>
+        ) : (
+          "First and only source covering this story so far."
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Geographic coverage ───────────────────────────────────────────────────
+function GeographicCoverage({ sources }: { sources: any[] }) {
+  if (!sources.length) return null;
+
+  const flags: Record<string, string> = {
+    US: "🇺🇸", UK: "🇬🇧", IN: "🇮🇳", AU: "🇦🇺", CA: "🇨🇦",
+    DE: "🇩🇪", FR: "🇫🇷", JP: "🇯🇵", SG: "🇸🇬", IL: "🇮🇱",
+    QA: "🇶🇦", RU: "🇷🇺", NZ: "🇳🇿", ZA: "🇿🇦", NG: "🇳🇬",
+    PK: "🇵🇰", MY: "🇲🇾", TH: "🇹🇭", PH: "🇵🇭", ID: "🇮🇩",
+  };
+
+  const data = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const s of sources) {
+      const c = s.publisher?.country;
+      if (!c || c.toLowerCase() === "unknown" || c.toLowerCase() === "global") continue;
+      counts[c] = (counts[c] || 0) + 1;
+    }
+
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    if (sorted.length === 0) return null;
+
+    const max = sorted[0]?.[1] || 1;
+    const shown = sorted.slice(0, 5);
+    const rest = sorted.slice(5);
+
+    return { sorted, max, shown, rest };
+  }, [sources]);
+
+  if (!data) return null;
+  const { sorted, max, shown, rest } = data;
+
+  return (
+    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-secondary/30 flex items-center justify-between">
+        <span className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+          Geographic coverage
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {sources.length} sources worldwide
+        </span>
+      </div>
+      <div className="p-4 space-y-3">
+        <div className="text-sm text-muted-foreground mb-1">
+          Sources mostly from {sorted[0]?.[0] === "US" ? "United States" : sorted[0]?.[0]} ({sorted[0]?.[1]})
+        </div>
+        {shown.map(([country, count]) => (
+          <div key={country} className="flex items-center gap-2">
+            <span className="text-base w-6 text-center flex-shrink-0">
+              {flags[country] || "🌍"}
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="flex justify-between text-sm mb-1">
+                <span className="text-foreground">{
+                  country === "US" ? "United States"
+                    : country === "UK" ? "United Kingdom"
+                      : country === "IN" ? "India"
+                        : country === "AU" ? "Australia"
+                          : country === "CA" ? "Canada"
+                            : country === "DE" ? "Germany"
+                              : country === "FR" ? "France"
+                                : country === "JP" ? "Japan"
+                                  : country
+                }</span>
+                <span className="font-bold text-foreground">{count}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${count / max > 0.6 ? "bg-blue-500"
+                      : count / max > 0.3 ? "bg-green-600"
+                        : "bg-gray-400"
+                    }`}
+                  style={{ width: `${(count / max) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+        {rest.length > 0 && (
+          <div className="text-xs text-blue-600 cursor-pointer pt-1">
+            +{rest.length} more countries →
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Similar news topics ───────────────────────────────────────────────────
+function SimilarTopics({ article }: { article: any }) {
+  const [, setLocation] = useLocation();
+  const { data: trending = [] } = useQuery({
+    queryKey: ["/api/articles/trending"],
+    queryFn: () => api.articles.trending(20),
+    staleTime: 60000,
+  });
+
+  const categoryColors = [
+    "bg-blue-500", "bg-green-600", "bg-purple-600",
+    "bg-amber-600", "bg-red-600", "bg-teal-600",
+  ];
+
+  // Build real source counts per category from trending data
+  const catCountMap = useMemo(() => {
+    const m = new Map<string, number>();
+    (trending as any[]).forEach(t =>
+      (t.categories || []).forEach((c: any) => m.set(c.slug, (m.get(c.slug) || 0) + 1))
+    );
+    return m;
+  }, [trending]);
+
+  // Primary: article's own categories. Fallback: fill from trending when article has none
+  const articleCats: any[] = article?.categories || [];
+  const topicMap = new Map<string, { name: string; slug: string; count: number; color: string; initials: string }>();
+
+  articleCats.forEach((c: any, i: number) => {
+    topicMap.set(c.slug, {
+      name: c.name, slug: c.slug,
+      count: catCountMap.get(c.slug) || 1,
+      color: categoryColors[i % categoryColors.length],
+      initials: c.name.slice(0, 2).toUpperCase(),
+    });
+  });
+
+  if (topicMap.size < 3) {
+    (trending as any[]).forEach(t =>
+      (t.categories || []).forEach((c: any) => {
+        if (!topicMap.has(c.slug) && topicMap.size < 6) {
+          topicMap.set(c.slug, {
+            name: c.name, slug: c.slug,
+            count: catCountMap.get(c.slug) || 1,
+            color: categoryColors[topicMap.size % categoryColors.length],
+            initials: c.name.slice(0, 2).toUpperCase(),
+          });
+        }
+      })
+    );
+  }
+
+  const [showAll, setShowAll] = useState(false);
+  const topicList = Array.from(topicMap.values()).slice(0, showAll ? 20 : 6);
+  if (!topicList.length) return null;
+
+  return (
+    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-secondary/30">
+        <span className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+          Similar news topics
+        </span>
+      </div>
+      {topicList.map((topic, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-3 px-4 py-3 border-b border-border last:border-0 cursor-pointer hover:bg-secondary/30 transition-colors"
+          onClick={() => setLocation(`/?category=${topic.slug}`)}
+        >
+          <div className={`w-9 h-9 rounded-lg ${topic.color} flex items-center justify-center text-sm font-bold text-white flex-shrink-0`}>
+            {topic.initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold text-foreground">{topic.name}</div>
+            <div className="text-xs text-muted-foreground">{topic.count} sources</div>
+          </div>
+        </div>
+      ))}
+      {!showAll && topicMap.size > 6 && (
+        <div className="px-4 py-2.5 text-center border-t border-border bg-secondary/10">
+          <button 
+            onClick={() => setShowAll(true)}
+            className="text-sm font-bold text-blue-600 hover:underline"
+          >
+            Show all topics →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Similar Articles Section ───────────────────────────────────────────────
+function SimilarArticlesSection({ articles, currentId }: { articles: any[]; currentId?: string }) {
+  const [, setLocation] = useLocation();
+  const filtered = articles.filter(a => a.id !== currentId).slice(0, 6);
+  if (filtered.length === 0) return null;
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-bold text-foreground">Similar articles</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Same event covered by different sources
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {filtered.map((a: any) => (
+          <div
+            key={a.id}
+            className="bg-card border border-border hover:border-primary/30 rounded-xl p-4 cursor-pointer transition-colors flex gap-3"
+            onClick={() => setLocation(`/article/${a.id}`)}
+          >
+            {a.heroImageUrl && !a.heroImageUrl.includes("placeholder") && (
+              <img
+                src={a.heroImageUrl}
+                alt={a.title}
+                className="w-14 h-14 object-cover rounded-lg flex-shrink-0"
+                loading="lazy"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-1">
+                <BiasChip bias={(a.bias || "center") as any} size="xs" />
+                <span className="text-xs font-bold text-muted-foreground truncate">
+                  {a.publisher?.name}
+                </span>
+              </div>
+              <h4 className="text-sm font-bold leading-snug text-foreground line-clamp-2">
+                {a.title}
+              </h4>
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatDistanceToNow(new Date(a.publishedAt || Date.now()))} ago
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function ArticleDetail() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [sourceTab, setSourceTab] = useState<SourceTab>("all");
-  const [visibleCount, setVisibleCount] = useState(8);
-  const [scrollProgress, setScrollProgress] = useState(0);
-  const [isReaderMode, setIsReaderMode] = useState(false);
-  const [hasTriggeredScrape, setHasTriggeredScrape] = useState(false);
+  const [activeFilter, setActiveFilter] = useState("All");
+  const [sourceSearch, setSourceSearch] = useState("");
+  const [showFullArticle, setShowFullArticle] = useState(false);
+  const [activePerspective, setActivePerspective] = useState<BiasPerspective | null>(null);
 
-  const { data: article, isLoading } = useQuery({
-    queryKey: ["/api/articles", id],
-    queryFn: () => api.articles.get(id!),
+  // ── Data fetching ────────────────────────────────────────────────────────
+  const { data: fullPack, isLoading } = useQuery({
+    queryKey: ["/api/articles", id, "full"],
+    queryFn: () => api.articles.getFull(id!),
     enabled: !!id,
+    staleTime: 60000,
   });
 
-  // Auto-trigger reader mode if it's explicitly a "full article" request 
-  // or if content already exists
-  useEffect(() => {
-    if (article?.fullContent) {
-      setIsReaderMode(true);
+  const article = fullPack?.article;
+  const clusterData = fullPack?.cluster;
+  const deepIntelligence = fullPack?.deepIntelligence;
+  const relatedRaw = fullPack?.related || [];
+  const similarRaw = fullPack?.similar || [];
+  const publisherData = fullPack?.publisherArticles;
+
+  // Exclude articles from same cluster — show genuinely different stories
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+  const publisherArticles = (publisherData?.articles || [])
+    .filter(a => a.clusterId !== article?.clusterId)
+    .filter(a => a.id !== article?.id)
+    .filter(a => (Date.now() - new Date(a.publishedAt || Date.now()).getTime()) < SEVEN_DAYS)
+    .slice(0, 3);
+
+
+  // ── Derived data ──────────────────────────────────────────────────────────
+  // allSources = current article + same-cluster articles (similarRaw).
+  // Used by sidebar: Bias Distribution, Who Broke Story, Geographic Coverage.
+  const allSources = useMemo(() => {
+    if (!article) return [];
+    const self: ArticleWithDetails = article;
+    return [self, ...similarRaw.filter(r => r.id !== self.id)];
+  }, [article, similarRaw]);
+
+  const biasStats = useMemo(() => {
+    const counts = { left: 0, center: 0, right: 0, total: allSources.length };
+    for (const s of allSources) {
+      const b = deriveBias(s);
+      if (b === "left") counts.left++;
+      else if (b === "right") counts.right++;
+      else counts.center++;
     }
-  }, [article?.fullContent]);
+    return counts;
+  }, [allSources]);
 
-  useEffect(() => {
-    const handleScroll = () => {
-      const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
-      const progress = (window.scrollY / totalHeight) * 100;
-      setScrollProgress(progress);
+  // filterCounts: tab counts from similarRaw (same cluster = same event, different sources)
+  const filterCounts = useMemo(() => {
+    const counts = { left: 0, center: 0, right: 0 };
+    for (const a of similarRaw) {
+      const b = deriveBias(a);
+      counts[b]++;
+    }
+    return counts;
+  }, [similarRaw]);
+
+  // Source count — prefer cluster's sourceCount, fall back to computed
+  // Source count — synchronized across all components
+  const displaySourceCount = Math.max(article?.sourceCount || 1, allSources.length);
+
+  // Filter + search: operates on similarRaw (same cluster = same event, different sources)
+  const filteredRelated = useMemo(() => {
+    let list = similarRaw;
+    if (activeFilter !== "All") {
+      list = list.filter(a => deriveBias(a) === activeFilter.toLowerCase());
+    }
+    if (sourceSearch.trim()) {
+      const q = sourceSearch.toLowerCase();
+      list = list.filter(a =>
+        a.title.toLowerCase().includes(q) ||
+        (a.publisher?.name || "").toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [similarRaw, activeFilter, sourceSearch]);
+
+  // Sources for MediaBiasDistribution component
+  const sourcesForChart = useMemo(() => allSources.map(a => ({
+    id: a.id,
+    source_name: a.publisher?.name || "Unknown",
+    article_title: a.title,
+    published_at: a.publishedAt?.toString() || "",
+    bias_label: ((a.bias || "center").toUpperCase()) as any,
+    factuality: a.publisher?.factualityRating || "unknown",
+    snippet: a.excerpt || "",
+    source_url: a.sourceUrl || a.url || "#",
+    similarity: 1,
+    publisher_id: a.sourceId || "",
+    hero_image: a.heroImageUrl,
+  })), [allSources]);
+
+  const getCategoryImage = (category: string) => {
+    const fallbacks: Record<string, string> = {
+      politics: "https://images.unsplash.com/photo-1540910419892-4a36d2c3266c?w=1200&q=80",
+      technology: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80",
+      business: "https://images.unsplash.com/photo-1444653614773-995cb1ef9efa?w=1200&q=80",
+      health: "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?w=1200&q=80",
+      sports: "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=1200&q=80",
+      world: "https://images.unsplash.com/photo-1521295121783-8a321d551ad2?w=1200&q=80",
     };
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
+    return fallbacks[category.toLowerCase()] || fallbacks.politics;
+  };
 
-
-  const { data: relatedData } = useQuery<ArticleWithDetails[]>({
-    queryKey: ["/api/articles", id, "related"],
-    queryFn: () => (api.articles as any).related(id!),
-    enabled: !!id,
-  });
-
-  // NEW: Topic-based source discovery (the Ground News killer feature)
-  const { data: sourceDiscovery, isLoading: isDiscoveringSources } = useQuery<any>({
-    queryKey: ["/api/sources", id],
-    queryFn: () => (api.articles as any).discoverSources(id!),
-    enabled: !!id,
-  });
-
-  const { data: allData } = useQuery<ArticleWithDetails[]>({
-    queryKey: ["/api/articles/trending"],
-    queryFn: () => api.articles.trending(10),
-  });
-
-  const { data: fullContentData, isLoading: isScraping, isError: scrapeError } = useQuery<{ fullContent: string }>({
-    queryKey: ["/api/articles", id, "full-content"],
-    queryFn: () => api.articles.getFullContent(id!),
-    enabled: !!id && isReaderMode && (!article?.fullContent),
-  });
-
-  const fullArticleHtml = article?.fullContent || fullContentData?.fullContent;
-
-  // NEW: Category Nearby Sections
-  const { data: categoryDataResult } = useQuery<{ articles: ArticleWithDetails[]; total: number }>({
-    queryKey: ["/api/articles/category", article?.categories?.[0]?.id],
-    queryFn: () => (api.articles as any).listByCategory(article!.categories[0].id, 6),
-    enabled: !!article?.categories?.[0]?.id,
-  });
-
-  // NEW: More from this Publisher
-  const { data: publisherDataResult } = useQuery<{ articles: ArticleWithDetails[]; total: number }>({
-    queryKey: ["/api/articles/publisher", article?.publisherId],
-    queryFn: () => (api.articles as any).listByPublisher(article!.publisherId, 6),
-    enabled: !!article?.publisherId,
-  });
-
-  // NEW: Blindspot fetching
-  const { data: blindspotDataResult } = useQuery<{ leftBlindspot: ArticleWithDetails[]; rightBlindspot: ArticleWithDetails[] }>({
-    queryKey: ["/api/blindspot"],
-    queryFn: api.blindspot as any,
-  });
-
-  const { data: bookmarksData = [] } = useQuery<ArticleWithDetails[]>({
+  // ── Bookmarks ────────────────────────────────────────────────────────────
+  const { data: isBookmarked = false } = useQuery<ArticleWithDetails[], Error, boolean>({
     queryKey: ["/api/bookmarks"],
     queryFn: api.bookmarks.list as any,
-    retry: false,
+    enabled: !!user,
+    select: (bookmarks) => bookmarks.some((a) => a.id === id),
   });
-
-  const bookmarkedIds = new Set((bookmarksData as ArticleWithDetails[]).map((a: ArticleWithDetails) => a.id));
-  const isBookmarked = id ? bookmarkedIds.has(id) : false;
 
   const bookmarkMutation = useMutation({
     mutationFn: () => isBookmarked ? api.bookmarks.remove(id!) : api.bookmarks.add(id!),
@@ -178,117 +818,110 @@ export default function ArticleDetail() {
     },
   });
 
+  // ── Analytics Tracking ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!id) return;
+    const trackView = async () => {
+      try {
+        await fetch(`/api/articles/${id}/view`, { method: "POST" });
+      } catch (e) {
+        console.error("Failed to track view", e);
+      }
+    };
+    trackView();
+  }, [id]);
   const handleShare = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
-      if (id) api.articles.share(id, "copy").catch(() => {});
-      toast({ title: "Link copied!" });
-    } catch { toast({ title: "Share", description: window.location.href }); }
-  };
-
-  // ── Source Discovery: use topic-based search results ──
-  const discoveredSources = sourceDiscovery?.sources || [];
-  const actualRelated = relatedData || [];
-  
-  // Filter discovered sources based on tab
-  const filteredSources = sourceTab === "all" 
-    ? discoveredSources 
-    : discoveredSources.filter((s: any) => s.bias_label?.toLowerCase() === sourceTab);
-  
-  // Dynamic source counts from the discovery API
-  const sources: { total: number; left: number; center: number; right: number } = {
-    total: sourceDiscovery?.total_sources || (article ? 1 + actualRelated.length : 0),
-    left: sourceDiscovery?.bias_distribution?.left_count || 0,
-    center: sourceDiscovery?.bias_distribution?.center_count || 0,
-    right: sourceDiscovery?.bias_distribution?.right_count || 0,
-  };
-  
-  const biasNums = {
-    left: sourceDiscovery?.bias_distribution?.left_percent || 0,
-    center: sourceDiscovery?.bias_distribution?.center_percent || 0,
-    right: sourceDiscovery?.bias_distribution?.right_percent || 0,
-  };
-  
-  // NEW: Refined source and bias extraction for the UI
-  const allSources: { 
-    id: string; 
-    sourceName: string; 
-    url: string; 
-    bias: string;
-    title: string;
-    factuality: string;
-    publishedAt: string;
-  }[] = useMemo(() => {
-    const discovered = sourceDiscovery?.sources || [];
-    if (discovered.length > 0) {
-      return discovered.map((s: any) => ({
-        id: s.id || s.publisher_id || Math.random().toString(),
-        sourceName: s.source_name || s.name || "Unknown",
-        url: s.url || s.website || "#",
-        bias: s.bias_label?.toLowerCase() || s.bias || "center",
-        title: s.title || "Latest Update",
-        factuality: s.factuality_label?.toLowerCase() || s.factuality || "high",
-        publishedAt: s.published_at || new Date().toISOString(),
-      }));
+      toast({ title: "Link copied to clipboard" });
+    } catch {
+      toast({ title: "Share link", description: window.location.href });
     }
-    
-    // Fallback to related articles
-    const localSources = article ? [article, ...actualRelated] : actualRelated;
-    return localSources.map(a => ({
-      id: a.id,
-      sourceName: a.publisher?.name || "Unknown",
-      url: a.sourceUrl || "#",
-      bias: a.bias || "center",
-      title: a.title,
-      factuality: a.publisher?.factualityRating || "high",
-      publishedAt: (a.publishedAt || a.createdAt).toISOString(),
-    }));
-  }, [sourceDiscovery, article, actualRelated]);
+  };
 
-  const biasStats = useMemo(() => {
-    if (sourceDiscovery?.bias_distribution) {
-      return {
-        left: sourceDiscovery.bias_distribution.left_count || 0,
-        center: sourceDiscovery.bias_distribution.center_count || 0,
-        right: sourceDiscovery.bias_distribution.right_count || 0,
-      };
+  // ── Summary ──────────────────────────────────────────────────────────────
+  const aiInsights = (article?.aiInsights as string[]) || [];
+  // Strip boilerplate lines from AI summaries (Bug 9)
+  const BAD_PREFIXES = ["read more", "read article", "click here", "subscribe", "sign up", "for more", "visit"];
+  const currentYear = new Date().getFullYear();
+  const summaryPoints = (
+    aiInsights.length > 0
+      ? aiInsights
+      : article?.excerpt
+        ? article.excerpt.split(". ").filter(s => s.length > 6)
+        : []
+  ).filter(p => !BAD_PREFIXES.some(bad => p.toLowerCase().trim().startsWith(bad)))
+   .filter(p => {
+     const yMatches = p.match(/\b(19|20)\d{2}\b/g);
+     if (!yMatches) return true;
+     return yMatches.every(yr => parseInt(yr) >= currentYear - 1);
+   })
+    .slice(0, 4);
+    
+  // Is article less than 30 mins old?
+  const isRecent = article?.publishedAt && (Date.now() - new Date(article.publishedAt).getTime() < 30 * 60 * 1000);
+
+  // ── Perspective Switching Logic ───────────────────────────────────────────────
+  const availableBiases = useMemo(() => {
+    const biases = new Set<BiasPerspective>();
+    allSources.forEach(s => {
+      const b = deriveBias(s);
+      if (b === "left" || b === "center" || b === "right") biases.add(b);
+    });
+    return biases;
+  }, [allSources]);
+
+  useEffect(() => {
+    if (article && !activePerspective) {
+      const b = deriveBias(article);
+      if (b === "left" || b === "center" || b === "right") setActivePerspective(b);
+      else if (availableBiases.has("center")) setActivePerspective("center");
+      else if (availableBiases.size > 0) setActivePerspective(Array.from(availableBiases)[0]);
     }
-    
-    // Calculate from current sources
-    return allSources.reduce((acc: any, s: any) => {
-      if (s.bias === "left") acc.left++;
-      else if (s.bias === "right") acc.right++;
-      else acc.center++;
-      return acc;
-    }, { left: 0, center: 0, right: 0 });
-  }, [sourceDiscovery, allSources]);
+  }, [article, activePerspective, availableBiases]);
 
-  const allStoryArticles = allSources;
+  const activeArticle = useMemo(() => {
+    if (!activePerspective) return article;
+    if (article && deriveBias(article) === activePerspective) return article;
+    const found = similarRaw.find(a => deriveBias(a) === activePerspective);
+    return found || article;
+  }, [activePerspective, article, similarRaw]);
 
-  const readingTime = useMemo(() => {
-    if (!article) return 0;
-    const words = (article.bodyHtml || "").split(/\s+/).length + (article.excerpt || "").split(/\s+/).length;
-    return Math.max(1, Math.ceil(words / 200));
-  }, [article]);
+  const activeSummaryPoints = useMemo(() => {
+    const target = activeArticle;
+    if (!target) return [];
+    const points = (target.aiInsights && target.aiInsights.length > 0
+      ? target.aiInsights
+      : target.excerpt
+        ? target.excerpt.split(". ").filter(s => s.length > 6)
+        : []
+    ).filter(p => !BAD_PREFIXES.some(bad => p.toLowerCase().trim().startsWith(bad)))
+     .filter(p => {
+       const yMatches = p.match(/\b(19|20)\d{2}\b/g);
+       if (!yMatches) return true;
+       return yMatches.every(yr => parseInt(yr) >= currentYear - 1);
+     })
+     .slice(0, 4);
+    return points;
+  }, [activeArticle, currentYear]);
 
-  const [emblaRef] = useEmblaCarousel({ loop: true, align: "start" }, [AutoPlay({ delay: 4000 })]);
-
+  // ── Loading ──────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background">
-        <MainNav onSearch={() => {}} searchQuery="" />
-        <div className="max-w-[1400px] mx-auto px-4 py-8">
-          <Skeleton className="h-5 w-24 mb-6" />
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-8">
+        <MainNav />
+        <div className="max-w-[1300px] mx-auto px-4 md:px-6 pt-10">
+          <Skeleton className="h-12 w-3/4 mb-4" />
+          <Skeleton className="h-5 w-1/4 mb-8" />
+          <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_320px] gap-10">
+            <Skeleton className="hidden lg:block h-[400px] w-full rounded-2xl" />
             <div className="space-y-4">
-              <Skeleton className="h-8 w-3/4" />
-              <Skeleton className="h-4 w-48" />
-              <Skeleton className="h-80 w-full rounded" />
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-14 w-3/4" />
+              <Skeleton className="h-5 w-1/3" />
+              <Skeleton className="h-[300px] w-full rounded-xl" />
+              <Skeleton className="h-[200px] w-full rounded-xl" />
             </div>
-            <Skeleton className="h-64 rounded" />
+            <Skeleton className="hidden lg:block h-[600px] w-full rounded-2xl" />
           </div>
         </div>
       </div>
@@ -297,743 +930,680 @@ export default function ArticleDetail() {
 
   if (!article) {
     return (
-      <div className="min-h-screen bg-background">
-        <MainNav onSearch={() => {}} searchQuery="" />
-        <div className="text-center py-20">
-          <p className="text-xl font-bold">Article not found</p>
-          <Button className="mt-4" onClick={() => setLocation("/")}>Back to Home</Button>
-        </div>
+      <div className="min-h-screen bg-background pt-24 text-center">
+        <h2 className="text-2xl font-bold text-foreground">Article not found</h2>
+        <Button onClick={() => setLocation("/")} className="mt-4">Return home</Button>
       </div>
     );
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-background">
-      <MainNav onSearch={() => {}} searchQuery="" />
-      
-      {/* Reading Progress Bar */}
-      <div className="fixed top-0 left-0 w-full h-1 z-[100] bg-zinc-200 dark:bg-zinc-800">
-        <div 
-          className="h-full bg-primary transition-all duration-75 ease-out"
-          style={{ width: `${scrollProgress}%` }}
-        />
-      </div>
+    <div className="min-h-screen bg-background text-foreground">
+      <ReadingProgressBar />
+      <MainNav />
 
-      <div className="max-w-[1400px] mx-auto px-4 py-5">
-        {/* Back button */}
-        <button
-          onClick={() => setLocation("/")}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-5 font-medium"
-          data-testid="button-back"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />Back
-        </button>
+      <main className="max-w-[1400px] mx-auto px-4 md:px-8 pt-8 pb-24">
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-10 items-start">
 
-          {/* ── LEFT: Article content + source list ── */}
-          <div>
-            <div className="text-[11px] text-muted-foreground mb-4 flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-foreground">Published {formatDistanceToNow(new Date(article.publishedAt || Date.now()), { addSuffix: true })}</span>
-              <span>·</span>
-              <span className="flex items-center gap-1"><Eye className="w-3 h-3" /> {Math.floor(Math.random() * 500) + 100} reading now</span>
-              <span>·</span>
-              <span>{readingTime} min read</span>
-              <span>·</span>
-              <span className="text-green-600 font-bold flex items-center gap-1"><div className="w-1 h-1 bg-green-600 rounded-full animate-pulse" /> Auto-fetching sources</span>
-              <div className="flex-1" />
-              <div className="flex items-center gap-3">
-                <button className="hover:text-foreground" title="Share Article"><Share2 className="w-4 h-4" onClick={handleShare} /></button>
-                {user && (
-                 <button className="hover:text-foreground" onClick={() => bookmarkMutation.mutate()} title="Bookmark">
-                   {isBookmarked ? <BookmarkCheck className="w-4 h-4 text-primary" /> : <Bookmark className="w-4 h-4" />}
-                 </button>
-                )}
-                <button onClick={() => window.open(article.sourceUrl || article.slug, "_blank")} title="View Original" className="hover:text-foreground">
-                  <ExternalLink className="w-4 h-4 cursor-pointer" />
+          {/* ── MAIN CONTENT ── */}
+          <div
+            className="min-w-0"
+          >
+
+            {/* ── ARTICLE HEADER ── */}
+            <div className="mb-8 pb-8 border-b border-border">
+              <div className="flex items-center gap-3 mb-6 text-xs font-bold uppercase tracking-widest text-muted-foreground transition-all duration-500">
+                 <span>{activeArticle?.categories?.[0]?.name || "World News"}</span>
+                 <span>·</span>
+                 <span>{formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now()), { addSuffix: true })}</span>
+              </div>
+              <h1 className="font-display text-[44px] font-bold leading-[1.1] tracking-tight text-foreground mb-4 transition-all duration-500">
+                {activeArticle?.title}
+              </h1>
+
+              {/* Perspective Slider */}
+              <div className="mb-6 flex items-center justify-between flex-wrap gap-4">
+                <PerspectiveSlider
+                  activeBias={activePerspective || "center"}
+                  onChange={setActivePerspective}
+                  availableBiases={availableBiases}
+                />
+                
+                <button className="px-4 py-2 rounded-full border border-border text-sm font-bold text-muted-foreground hover:bg-secondary transition-colors shrink-0" onClick={() => article?.clusterId && setLocation(`/compare/${article.clusterId}`)}>
+                  Open Bias Comparison
                 </button>
               </div>
             </div>
+          {displaySourceCount > 1 && (
+            <div className="flex items-center gap-2 mb-5">
+              <span className="inline-flex items-center gap-1.5 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-xs font-bold px-3 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                Covered by {displaySourceCount} {displaySourceCount === 1 ? 'source' : 'sources'}
+              </span>
+              {article.storyPhase === "breaking" && (
+                <span className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 text-xs font-bold px-3 py-1 rounded-full">
+                  Breaking
+                </span>
+              )}
+              {article.storyPhase === "developing" && (
+                <span className="inline-flex items-center gap-1 bg-amber-50 border border-amber-200 text-amber-700 text-xs font-bold px-3 py-1 rounded-full">
+                  Developing
+                </span>
+              )}
+            </div>
+          )}
 
-            {/* NEW: Reader Mode Toggle / Premium Indicator */}
-            <div className="mb-6 flex items-center justify-between bg-primary/5 border border-primary/20 rounded-xl p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                  <BookOpen className="w-5 h-5" />
+          {/* Hero image — stabilized with fallback (Phase 2 hardening) */}
+          <div className="w-full overflow-hidden mb-8 rounded-xl relative transition-all duration-500" style={{ aspectRatio: "16/9", maxHeight: "420px" }}>
+            <img
+              key={activeArticle?.id}
+              src={
+                (activeArticle?.heroImageUrl && !activeArticle.heroImageUrl.includes("placeholder") && !["election", "vote", "ballot"].some(w => activeArticle.heroImageUrl!.toLowerCase().includes(w)))
+                  ? activeArticle.heroImageUrl
+                  : getCategoryImage(activeArticle?.categories?.[0]?.slug || "world")
+              }
+              alt={activeArticle?.title}
+              width={1200}
+              height={514}
+              className="w-full h-full object-cover transition-opacity duration-500"
+              loading="eager"
+            />
+          </div>
+
+          {/* Balanced AI Synthesis (Llama-3.1 Powered Story Neutral Summary) */}
+          {clusterData && (clusterData.summary || (clusterData.aiSummary && clusterData.aiSummary.length > 0)) && (
+            <div className="relative overflow-hidden bg-gradient-to-br from-purple-500/5 via-transparent to-pink-500/5 border-2 border-purple-500/10 rounded-2xl p-6 md:p-8 mb-8 shadow-md">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="p-2 bg-purple-500/10 rounded-xl">
+                  <Zap className="w-5 h-5 text-purple-600 animate-pulse" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold flex items-center gap-1.5">
-                    Ground Reader Mode <Sparkles className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                  </h4>
-                  <p className="text-[11px] text-muted-foreground">Read the full story without ads or trackers, extracted by our AI.</p>
+                  <h3 className="text-sm font-black uppercase tracking-widest text-purple-900">Balanced AI Synthesis</h3>
+                  <p className="text-[10px] font-bold text-purple-600/70">Perspective-Neutral Summary & Consensus</p>
+                </div>
+                <div className="ml-auto">
+                  <span className="inline-flex items-center bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 text-xs font-black px-2.5 py-0.5 rounded-full">
+                    Llama-3.1 Live
+                  </span>
                 </div>
               </div>
-              <Button 
-                onClick={() => setIsReaderMode(!isReaderMode)}
-                variant={isReaderMode ? "outline" : "default"}
-                size="sm"
-                className="font-bold text-xs uppercase tracking-widest px-6"
-              >
-                {isReaderMode ? "Exit Reader" : "Enter Reader"}
-              </Button>
-            </div>
 
-            {/* Title */}
-            <h1 className="text-3xl font-bold leading-tight mb-4" style={{ fontFamily: "Georgia, serif" }} data-testid="text-article-title">
-              {article.title}
-            </h1>
-
-            {/* Action bar (Left Center Right toggles) */}
-            <div className="flex items-center gap-2 mb-6">
-              <div className="flex bg-secondary/30 rounded-lg p-1 border border-border/50">
-                {(["left", "center", "right"] as const).map((bias) => (
-                  <button
-                    key={bias}
-                    onClick={() => setSourceTab(bias)}
-                    className={`px-6 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded-md transition-all ${
-                      sourceTab === bias
-                        ? bias === "left" ? "bg-blue-600 text-white shadow-md" : bias === "center" ? "bg-violet-600 text-white shadow-md" : "bg-red-600 text-white shadow-md"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {bias}
-                  </button>
-                ))}
-                <button
-                   onClick={() => setSourceTab("all")}
-                   className={`px-6 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded-md transition-all ${
-                     sourceTab === "all" ? "bg-zinc-800 text-white shadow-md dark:bg-zinc-100 dark:text-zinc-900" : "text-muted-foreground hover:text-foreground"
-                   }`}
-                >
-                  All
-                </button>
-              </div>
-              <button className="px-5 py-2 text-[11px] font-bold uppercase tracking-wider bg-secondary border border-border/50 hover:bg-secondary/70 rounded-lg flex items-center gap-2 transition-colors">
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                Bias Comparison
-              </button>
-            </div>
-
-            {/* Article Content / Reader Mode Display */}
-            <div className="relative mb-12">
-              {isReaderMode ? (
-                <div className="bg-card border border-primary/20 rounded-2xl p-8 md:p-12 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="max-w-2xl mx-auto">
-                    {isScraping ? (
-                      <div className="space-y-4">
-                        <Skeleton className="h-6 w-full" />
-                        <Skeleton className="h-4 w-5/6" />
-                        <Skeleton className="h-4 w-full" />
-                        <Skeleton className="h-4 w-4/6" />
-                        <div className="py-8 flex flex-col items-center justify-center text-center gap-4">
-                          <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-                          <p className="text-sm font-medium text-muted-foreground mt-4">Ground AI is extracting content from <br/><span className="text-foreground font-bold">{article.publisher?.name}</span>...</p>
-                        </div>
-                      </div>
-                    ) : scrapeError ? (
-                      <div className="py-12 text-center space-y-4">
-                        <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                          <X className="w-8 h-8" />
-                        </div>
-                        <h3 className="text-lg font-bold">Extraction Failed</h3>
-                        <p className="text-sm text-muted-foreground">We couldn't extract the full content from this source. You can still read the original article.</p>
-                        <Button variant="outline" onClick={() => window.open(article.sourceUrl || article.slug, "_blank")} className="mt-4">
-                           View at {article.publisher?.name} <ExternalLink className="w-3.5 h-3.5 ml-2" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <div 
-                        className="prose prose-zinc dark:prose-invert max-w-none prose-p:text-[17px] prose-p:leading-[1.7] prose-headings:font-serif"
-                        dangerouslySetInnerHTML={{ __html: fullArticleHtml || "" }}
-                      />
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="mb-8">
-                  <div className="flex items-center justify-between mb-3 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3.5 h-3.5 rounded-full border border-current flex items-center justify-center font-bold" style={{ fontSize: "8px" }}>i</span>
-                      Insights by <span className="text-foreground font-bold">NewsPlatform AI</span>
-                    </span>
-                    <span className="cursor-pointer hover:underline flex items-center gap-1">
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      Does this summary seem wrong?
-                    </span>
-                  </div>
-                  <ul className="space-y-4 text-[15px] leading-relaxed pl-5 list-disc text-foreground/90 font-medium marker:text-primary">
-                    {article.aiInsights && article.aiInsights.length > 0 ? (
-                      (article.aiInsights as string[]).map((point, i) => (
-                         <li key={i} className="animate-in fade-in slide-in-from-left-2 duration-500" style={{ animationDelay: `${i * 100}ms` }}>
-                          {point}
-                        </li>
-                      ))
-                    ) : (
-                      getSummaryPoints(
-                        article,
-                        sources.total,
-                        sources.left > sources.right && sources.left > sources.center ? "Left-leaning" : 
-                        sources.right > sources.left && sources.right > sources.center ? "Right-leaning" : "Centrist"
-                      ).map((point, i) => (
-                        <li key={i}>{point}</li>
-                      ))
-                    )}
-                  </ul>
-                  <div className="mt-8 p-6 bg-secondary/20 rounded-xl border border-border/50 text-center">
-                    <p className="text-sm text-muted-foreground mb-4">Click below to read the full story within our premium reader.</p>
-                    <a href={article.sourceUrl || "#"} target="_blank" rel="noopener noreferrer">
-                      <Button className="font-bold">Read Full Article on Source</Button>
-                    </a>
-                  </div>
-                </div>
+              {clusterData.summary && (
+                <p className="font-serif text-[17px] leading-[1.8] text-foreground font-medium mb-6">
+                  {clusterData.summary}
+                </p>
               )}
-            </div>
 
-            {/* ── SOURCE LIST (the key Ground News feature) ── */}
-            <div className="border-t pt-6">
-              <div className="flex items-center gap-8 mb-6">
-                <h2 className="text-[22px] font-bold">{sources.total} Articles</h2>
-                
-                {/* Tabs: All / Left / Center / Right */}
-                <div className="flex items-center gap-6">
-                  {([
-                    { key: "all",    label: `All`,    count: null },
-                    { key: "left",   label: `Left`,   count: sources.left   },
-                    { key: "center", label: `Center`, count: sources.center },
-                    { key: "right",  label: `Right`,  count: sources.right  },
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.key}
-                      onClick={() => setSourceTab(tab.key)}
-                      className={`flex items-center gap-1.5 text-[13px] pb-1 border-b-[3px] transition-colors ${
-                        sourceTab === tab.key
-                          ? tab.key === "left" ? "border-blue-500 font-bold" : tab.key === "center" ? "border-violet-500 font-bold" : tab.key === "right" ? "border-red-500 font-bold" : "border-foreground font-bold"
-                          : "border-transparent text-muted-foreground hover:text-foreground font-medium"
-                      }`}
-                      data-testid={`source-tab-${tab.key}`}
-                    >
-                      {tab.label}
-                      {tab.count !== null && <span className="text-[9px] bg-secondary text-muted-foreground font-bold rounded-full px-1.5 py-0.5">{tab.count}</span>}
-                    </button>
-                  ))}
-                </div>
-                
-                <div className="flex-1" />
-                <div className="flex items-center gap-3">
-                  <button className="text-muted-foreground hover:text-foreground"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>
-                  <button className="text-muted-foreground hover:text-foreground"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>
-                </div>
-              </div>
-
-              {/* Primary article source */}
-              <div className="border border-card-border rounded p-4 mb-3 bg-card">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <PublisherAvatar name={article.publisher?.name ?? "??"} size="xs" />
-                    <span className="text-xs font-bold">{article.publisher?.name}</span>
-                    {article.publisher?.biasRating && <BiasChip bias={article.publisher.biasRating} size="xs" />}
-      {/* Ground AI Insight Engine Section */}
-      <section id="ai-insights" className="mb-12">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2 bg-purple-100 rounded-lg">
-            <Sparkles className="w-6 h-6 text-purple-600" />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">Ground AI Insights</h2>
-            <p className="text-sm text-gray-500">Synthesized perspectives from {allSources.length} global sources</p>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-white to-purple-50 rounded-2xl border border-purple-100 shadow-sm overflow-hidden">
-          <div className="p-8">
-            <div className="space-y-4">
-              {(article.aiInsights as string[] || []).map((insight, idx) => (
-                <div key={idx} className="flex gap-4 group">
-                  <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0 group-hover:scale-150 transition-transform" />
-                  <p className="text-gray-700 leading-relaxed text-lg">{insight}</p>
-                </div>
-              ))}
-              {(!article.aiInsights || (article.aiInsights as string[]).length === 0) && (
-                <p className="text-gray-500 italic">Waiting for more sources to synthesize insights...</p>
-              )}
-            </div>
-            
-            <div className="mt-8 pt-6 border-t border-purple-100 flex items-center justify-between text-sm text-purple-600 font-medium">
-              <span className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4" /> Balanced Perspective Engine Active
-              </span>
-              <button className="hover:underline">How this works?</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Coverage Distribution */}
-      <section className="mb-16">
-        <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
-          <Scale className="w-5 h-5 text-blue-600" />
-          Media Bias Distribution
-        </h3>
-        <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
-          <div className="flex h-4 w-full rounded-full overflow-hidden bg-gray-100 mb-6">
-            <div 
-              style={{ width: `${(biasStats.left / allSources.length) * 100}%` }} 
-              className="bg-blue-500 transition-all duration-1000"
-              title={`Left: ${biasStats.left}`}
-            />
-            <div 
-              style={{ width: `${(biasStats.center / allSources.length) * 100}%` }} 
-              className="bg-gray-400 transition-all duration-1000"
-              title={`Center: ${biasStats.center}`}
-            />
-            <div 
-              style={{ width: `${(biasStats.right / allSources.length) * 100}%` }} 
-              className="bg-red-500 transition-all duration-1000"
-              title={`Right: ${biasStats.right}`}
-            />
-          </div>
-          
-          <div className="grid grid-cols-3 gap-4">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{Math.round((biasStats.left / allSources.length) * 100)}%</div>
-              <div className="text-xs text-gray-500 font-medium uppercase tracking-wider">Left</div>
-            </div>
-            <div className="text-center border-x border-gray-100">
-              <div className="text-2xl font-bold text-gray-600">{Math.round((biasStats.center / allSources.length) * 100)}%</div>
-              <div className="text-xs text-gray-500 font-medium uppercase tracking-wider">Center</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-red-600">{Math.round((biasStats.right / allSources.length) * 100)}%</div>
-              <div className="text-xs text-gray-500 font-medium uppercase tracking-wider">Right</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Full Source Discovery List */}
-      <section id="full-coverage">
-        <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-bold text-gray-900">Full Coverage</h2>
-          <div className="text-sm text-gray-500 font-medium">
-            Showing <span className="text-gray-900">{allSources.length}</span> sources
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {allSources.map((source, idx) => (
-            <a 
-              key={source.id} 
-              href={source.url} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="group bg-white p-5 rounded-xl border border-gray-100 hover:border-gray-300 hover:shadow-md transition-all flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center overflow-hidden">
-                      {(() => {
-                        let hostname = "example.com";
-                        try {
-                          if (source.url && source.url !== "#") {
-                            hostname = new URL(source.url).hostname;
-                          }
-                        } catch (e) {}
-                        
-                        return (
-                          <img 
-                            src={`https://www.google.com/s2/favicons?sz=64&domain=${hostname}`} 
-                            alt={source.sourceName}
-                            className="w-6 h-6"
-                            onError={(e) => (e.currentTarget.style.display = 'none')}
-                          />
-                        );
-                      })()}
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors uppercase text-xs tracking-tight">
-                        {source.sourceName}
-                      </h4>
-                      <p className="text-[10px] text-gray-400 font-mono truncate max-w-[120px]">
-                        {(() => {
-                          try {
-                            return (source.url && source.url !== "#") ? new URL(source.url).hostname : "source.com";
-                          } catch (e) {
-                            return "source.com";
-                          }
-                        })()}
+              {clusterData.aiSummary && clusterData.aiSummary.length > 0 && (
+                <div className="space-y-3.5 border-t border-purple-500/10 pt-5">
+                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-purple-600 mb-2">Key Takeaways</h4>
+                  {clusterData.aiSummary.map((point: string, i: number) => (
+                    <div key={i} className="flex gap-3 items-start">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-500 mt-2 shrink-0 animate-pulse" />
+                      <p className="font-sans text-[14px] text-muted-foreground leading-[1.6]">
+                        {point.trim()}
                       </p>
                     </div>
-                  </div>
-                  <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${
-                    source.bias === 'left' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
-                    source.bias === 'right' ? 'bg-red-50 text-red-600 border border-red-100' :
-                    'bg-gray-100 text-gray-600 border border-gray-200'
-                  }`}>
-                    {source.bias}
-                  </div>
+                  ))}
                 </div>
-                <h5 className="text-sm font-medium text-gray-800 line-clamp-2 leading-snug mb-4 h-10 group-hover:underline">
-                  {source.title}
-                </h5>
-              </div>
-              
-              <div className="flex items-center justify-between py-3 border-t border-gray-50 mt-auto">
-                <div className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full ${
-                    source.factuality === 'very_high' || source.factuality === 'high' ? 'bg-green-500' :
-                    source.factuality === 'mixed' ? 'bg-yellow-500' : 'bg-red-500'
-                  }`} />
-                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tighter">
-                    {source.factuality?.replace('_', ' ') || 'unknown'} Reliability
-                  </span>
-                </div>
-                <div className="text-[10px] text-gray-400 font-medium">
-                  {formatDistanceToNow(new Date(source.publishedAt), { addSuffix: true })}
-                </div>
-              </div>
-            </a>
-          ))}
-        </div>
-      </section>
-                  </div>
-                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                    <span className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 font-semibold px-1 rounded">Primary</span>
-                    {article.publishedAt && <span>{formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })}</span>}
-                  </div>
-                </div>
-                <div className="flex gap-1.5 mb-2 text-[10px] text-muted-foreground">
-                  <span>Ownership: <span className="font-semibold text-foreground">{article.publisher?.ownerName || article.publisher?.name}</span></span>
-                  <span>·</span>
-                  <span>Factuality: <span className={`font-semibold ${
-                    article.publisher?.factualityRating === "very_high" ? "text-green-600" :
-                    article.publisher?.factualityRating === "high" ? "text-blue-600" :
-                    article.publisher?.factualityRating === "mixed" ? "text-amber-600" :
-                    article.publisher?.factualityRating === "low" ? "text-orange-600" :
-                    article.publisher?.factualityRating === "very_low" ? "text-red-600" : "text-muted-foreground"
-                  }`}>{(article.publisher?.factualityRating || "unknown").replace("_", " ").toUpperCase()}</span></span>
-                </div>
-                <p className="text-sm font-bold line-clamp-2 mb-1">{article.title}</p>
-                <p className="text-xs text-muted-foreground line-clamp-2">{article.excerpt}</p>
-                <div className="mt-3 flex items-center justify-between">
-                  <div className="w-32">
-                    <BiasBar left={biasNums.left} center={biasNums.center} right={biasNums.right} size="xs" />
-                  </div>
-                  <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-                    Read Full Article <ExternalLink className="w-2.5 h-2.5 ml-0.5" />
-                  </span>
-                </div>
+              )}
+            </div>
+          )}
+
+          {article.clusterId && <ExecutiveBriefing clusterId={article.clusterId} />}
+          
+          <StoryOrigin publisher={deepIntelligence?.origin?.publisher} publishedAt={deepIntelligence?.origin?.publishedAt} />
+          
+          {article.clusterId && <ForeignGazePanel clusterId={article.clusterId} />}
+          
+          <DeepIntelligenceDashboard data={deepIntelligence} isLoading={isLoading} />
+
+          <div className="flex lg:hidden items-center gap-3 mb-6 flex-wrap">
+            <span className="text-xs font-bold text-muted-foreground bg-secondary px-3 py-1.5 rounded-full">
+              {displaySourceCount} {displaySourceCount === 1 ? "source" : "sources"}
+            </span>
+            <span className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full">
+              Left {biasStats.left}
+            </span>
+            <span className="text-xs font-bold text-gray-600 bg-gray-100 px-3 py-1.5 rounded-full">
+              Center {biasStats.center}
+            </span>
+            <span className="text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-full">
+              Right {biasStats.right}
+            </span>
+          </div>
+
+
+          {/* Publisher row */}
+          <div className="flex items-center gap-4 mb-8 py-4 border-b border-border transition-all duration-500">
+            <PublisherLogo name={activeArticle?.publisher?.name || "?"} domain={activeArticle?.publisher?.website} size="md" />
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-foreground">{activeArticle?.publisher?.name}</span>
+                {activeArticle?.publisher?.biasRating && (
+                  <BiasChip bias={(activeArticle.publisher.biasRating || "center") as any} size="xs" />
+                )}
+                <span className="text-sm text-muted-foreground">
+                  updated {formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now()), { addSuffix: true })}
+                </span>
               </div>
 
-              <div className="flex flex-col gap-6 mt-6">
-                {isDiscoveringSources ? (
-                  <div className="py-12 text-center">
-                    <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full mx-auto mb-3" />
-                    <p className="text-sm text-muted-foreground font-medium">Discovering sources across the web...</p>
+              <a
+                href={activeArticle?.sourceUrl || activeArticle?.url || "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-bold mt-0.5"
+              >
+                Read article on {activeArticle?.publisher?.name} <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+            </div>
+
+            <div className="ml-auto flex gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 rounded-full"
+                onClick={() => bookmarkMutation.mutate()}
+              >
+                {isBookmarked
+                  ? <BookmarkCheck className="w-4 h-4 text-blue-600" />
+                  : <Bookmark className="w-4 h-4" />}
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 rounded-full"
+                onClick={handleShare}
+              >
+                <Share2 className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Summary box */}
+          <div className="bg-card border border-border rounded-xl overflow-hidden mb-6 transition-all duration-500">
+            <div className="bg-secondary/40 px-5 py-3 border-b border-border flex items-center gap-3 flex-wrap">
+              <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+              <span className="text-xs font-black text-foreground shrink-0 uppercase tracking-widest">{activeArticle?.publisher?.name || "The Lens Dispatch"}</span>
+              {activeArticle && <BiasChip bias={deriveBias(activeArticle)} size="xs" />}
+            </div>
+            <div className="p-6 space-y-4">
+              {activeSummaryPoints.length === 0 ? (
+                (activeArticle?.id === article?.id && isRecent) ? (
+                  <div className="flex items-center gap-3 text-muted-foreground py-2">
+                    <div className="w-4 h-4 border-2 border-border border-t-purple-400 rounded-full animate-spin" />
+                    <span className="text-sm">Summary being generated...</span>
                   </div>
-                ) : filteredSources.length > 0 ? (
-                  filteredSources.slice(0, visibleCount).map((source: any) => (
-                    <div key={source.id} className="group relative border-b border-border/40 pb-6 last:border-0">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <PublisherAvatar name={source.source_name ?? "Unknown"} size="xs" />
-                          <span className="text-xs font-bold text-foreground/90">{source.source_name || "Unknown Source"}</span>
-                          <BiasChip bias={source.bias_label?.toLowerCase() || "center"} size="xs" />
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <span className="text-[10px] text-muted-foreground bg-secondary/50 px-1.5 py-0.5 rounded">{source.factuality || "UNKNOWN"}</span>
+                ) : (
+                  <div className="flex items-center gap-3 text-muted-foreground py-2">
+                    <span className="text-sm">No detailed summary available for this perspective.</span>
+                  </div>
+                )
+              ) : activeSummaryPoints.map((point, i) => (
+                <div key={i} className="flex gap-4 items-start py-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-purple-500 mt-2 shrink-0" />
+                  <p className="font-serif text-[16px] text-foreground leading-[1.75]">
+                    {point.trim()}{point.endsWith(".") ? "" : "."}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Read full article button */}
+          {!showFullArticle ? (
+            <div className="flex justify-center mb-10 py-2 border-y border-dashed border-border">
+              <Button
+                size="lg"
+                className="rounded-full bg-[#af2b2b] hover:bg-[#8e2323] text-white font-bold text-sm px-8 gap-2"
+                onClick={() => {
+                  if (activeArticle?.sourceUrl || activeArticle?.url) {
+                    window.open(activeArticle.sourceUrl || activeArticle.url, "_blank", "noreferrer");
+                  } else {
+                    setShowFullArticle(true);
+                  }
+                }}
+              >
+                Read full article on {activeArticle?.publisher?.name}
+                <ExternalLink className="w-4 h-4" />
+              </Button>
+            </div>
+          ) : (
+          <div className="mb-12 p-10 bg-card border border-border prose prose-zinc dark:prose-invert max-w-none">
+            <div className="flex justify-between items-center mb-8 pb-4 border-b-4 border-double border-border/50">
+              <h3 className="text-2xl font-serif font-bold text-foreground">Full Article · {activeArticle?.publisher?.name}</h3>
+              <Button variant="ghost" size="sm" className="font-bold uppercase tracking-widest text-xs" onClick={() => setShowFullArticle(false)}>Close View</Button>
+            </div>
+            <div
+              className="font-serif text-[18px] md:text-[20px] leading-[1.8] text-foreground space-y-6 transition-all duration-500"
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(
+                  activeArticle?.fullContent || activeArticle?.bodyHtml ||
+                  "<p>The full narrative for this story from " + activeArticle?.publisher?.name + " is restricted. Please use the link below to access the original document.</p>"
+                )
+              }}
+            />
+          </div>
+          )}
+
+        {/* ── STICKY FILTER BAR ── */}
+        <div className="sticky top-0 z-40 bg-background/98 backdrop-blur-sm py-4 border-y border-border mb-10 flex items-center justify-between gap-6 px-2">
+          <div className="flex items-center gap-3">
+            <span className="text-[28px] font-bold text-foreground leading-none">{displaySourceCount}</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+              Total Perspectives
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-secondary/40 p-1 rounded-full border border-border">
+            {(["All", "Left", "Center", "Right"] as const).map(f => {
+              const activeColors = {
+                All: "bg-foreground text-background",
+                Left: "bg-blue-600 text-white",
+                Center: "bg-gray-500 text-white",
+                Right: "bg-red-600 text-white",
+              };
+              const count = f === "All" ? similarRaw.length
+                : f === "Left" ? filterCounts.left
+                  : f === "Center" ? filterCounts.center
+                    : filterCounts.right;
+              return (
+                <button
+                  key={f}
+                  onClick={() => setActiveFilter(f)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-bold transition-all ${
+                    activeFilter === f ? activeColors[f] : "text-muted-foreground hover:bg-secondary"
+                  }`}
+                >
+                  {f} {f !== "All" && count > 0 && <span className="opacity-70 ml-0.5">{count}</span>}
+                </button>
+              );
+            })}
+          </div>
+
+
+          <div className="relative shrink-0 hidden sm:block">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search sources..."
+              value={sourceSearch}
+              onChange={e => setSourceSearch(e.target.value)}
+              className="pl-9 pr-4 py-1.5 rounded-full border border-border text-xs w-56 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+        </div>
+
+        {/* ── TWO-COLUMN LAYOUT ── */}
+        <div className="flex flex-col lg:flex-row gap-12 items-start">
+
+          {/* ── LEFT COLUMN ── */}
+          <div className="flex-1 min-w-0 lg:border-r border-border lg:pr-14 space-y-16">
+
+
+            {/* ── SECTION 1: Same story different angle ── */}
+            <section>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-foreground">Same story, different angle</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    How {displaySourceCount} {displaySourceCount === 1 ? "source is" : "sources are"} covering this
+                  </p>
+                </div>
+                {article?.clusterId && (
+                  <span className="text-xs font-bold text-blue-600 cursor-pointer hover:underline"
+                    onClick={() => setLocation(`/compare/${article.clusterId}`)}>
+                    See all sources
+                  </span>
+                )}
+              </div>
+
+              {/* Framing comparison — show AI analysis or headline comparison */}
+              {(clusterData?.aiFramingDiff || (biasStats.left > 0 && biasStats.right > 0)) && (() => {
+                const leftArt = relatedRaw.find(a => deriveBias(a) === "left");
+                const rightArt = relatedRaw.find(a => deriveBias(a) === "right");
+                
+                return (
+                  <div className="bg-card border border-border rounded-xl p-6 mb-6">
+                    <p className="text-xs font-black text-muted-foreground uppercase tracking-widest mb-4 flex items-center gap-2">
+                       <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                       Journalistic Framing Analysis
+                    </p>
+                    
+                    {clusterData?.aiFramingDiff ? (
+                      <div className="mb-6 p-4 bg-purple-50/50 dark:bg-purple-950/20 border border-purple-100 dark:border-purple-900 rounded-lg">
+                        <p className="font-serif text-[15px] italic text-foreground leading-relaxed">
+                          "{clusterData.aiFramingDiff}"
+                        </p>
+                        <div className="mt-3 flex items-center gap-2">
+                           <div className="w-4 h-4 rounded-full bg-purple-600 flex items-center justify-center text-[8px] text-white font-bold">AI</div>
+                           <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400">FLAN-T5 Synthesis</span>
                         </div>
                       </div>
-                      <a href={source.source_url} target="_blank" rel="noopener noreferrer" className="block hover:opacity-80 transition-opacity">
-                        <h4 className="text-lg font-bold leading-tight mb-2 tracking-tight">{source.article_title}</h4>
-                        <p className="text-[14px] text-muted-foreground line-clamp-2 leading-relaxed mb-3">{source.snippet}</p>
-                      </a>
-                      <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground">
-                        <div className="flex items-center gap-3">
-                          <span>{source.published_at ? formatDistanceToNow(new Date(source.published_at), { addSuffix: true }) : "recently"}</span>
-                          <span>·</span>
-                          <span>Similarity: {Math.round((source.similarity || 0) * 100)}%</span>
+                    ) : null}
+
+                    {leftArt && rightArt && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-blue-50/50 dark:bg-blue-950/20 rounded-xl p-4 border-l-4 border-blue-500">
+                          <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Left headline · {leftArt.publisher?.name}</span>
+                          <p className="text-[13px] font-bold text-foreground mt-1.5 leading-snug">{leftArt.title}</p>
                         </div>
-                        <a href={source.source_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
-                          Full Article <ExternalLink className="w-3 h-3" />
-                        </a>
+                        <div className="bg-red-50/50 dark:bg-red-950/20 rounded-xl p-4 border-l-4 border-red-500">
+                          <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">Right headline · {rightArt.publisher?.name}</span>
+                          <p className="text-[13px] font-bold text-foreground mt-1.5 leading-snug">{rightArt.title}</p>
+                        </div>
                       </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Coverage gap warning */}
+              {biasStats.right === 0 && biasStats.total > 2 && (
+                <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl px-4 py-3 mb-4 flex items-start gap-3">
+                  <span className="text-amber-500 text-lg mt-0.5">⚠</span>
+                  <div>
+                    <p className="text-xs font-bold text-amber-800 dark:text-amber-300">Right-leaning sources are not covering this story</p>
+                    <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">This may be a blindspot. Check the Blindspot feed for stories your sources are missing.</p>
+                  </div>
+                </div>
+              )}
+              {biasStats.left === 0 && biasStats.total > 2 && (
+                <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl px-4 py-3 mb-4 flex items-start gap-3">
+                  <span className="text-blue-500 text-lg mt-0.5">⚠</span>
+                  <div>
+                    <p className="text-xs font-bold text-blue-800 dark:text-blue-300">Left-leaning sources are not covering this story</p>
+                    <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">This may be a blindspot on the left. Check the Blindspot feed.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Context Diff Panel */}
+              <ContextDiffPanel activeArticle={activeArticle!} clusterArticles={relatedRaw} />
+
+              {filteredRelated.length > 0 ? (() => {
+                const uniqueGrid: { article: any, extra: number, pid: string | null }[] = [];
+                const pubCounts = new Map<string, number>();
+
+                for (const a of filteredRelated) {
+                  const pid = a.sourceId || a.publisher?.id || a.publisher?.name;
+                  if (!pid) {
+                    uniqueGrid.push({ article: a, extra: 0, pid: null });
+                    continue;
+                  }
+                  if (!pubCounts.has(pid)) {
+                    pubCounts.set(pid, 1);
+                    uniqueGrid.push({ article: a, extra: 0, pid });
+                  } else {
+                    pubCounts.set(pid, pubCounts.get(pid)! + 1);
+                    const match = uniqueGrid.find(u => u.pid === pid);
+                    if (match) match.extra++;
+                  }
+                }
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    {uniqueGrid.slice(0, 6).map(({ article: source, extra }) => (
+                      <div key={source.id}
+                        className="bg-card border border-border hover:border-primary/40 transition-colors rounded-xl p-5 flex flex-col justify-between cursor-pointer relative"
+                        onClick={() => setLocation(`/article/${source.id}`)}>
+                        {extra > 0 && (
+                          <div className="absolute top-0 right-0 -mt-2 -mr-2 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-black px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800 shadow-sm z-10">
+                            +{extra} MORE
+                          </div>
+                        )}
+                        <div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <PublisherLogo name={source.publisher?.name || "?"} domain={source.publisher?.website} size="xs" />
+                            <span className="text-xs font-bold text-muted-foreground uppercase tracking-tight truncate max-w-[140px]">
+                              {source.publisher?.name}
+                            </span>
+                            <div className="ml-auto flex items-center gap-1">
+                              <BiasChip bias={(source.bias || "center") as any} size="xs" />
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                {source.publisher?.ownership && (
+                                  <span 
+                                    className="border border-border rounded px-1.5 py-0.5 hover:text-blue-600 cursor-pointer"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      window.open(`https://mediabiasfactcheck.com/?s=${encodeURIComponent(source.publisher?.name || "")}`, "_blank");
+                                    }}
+                                  >
+                                    Ownership ↗
+                                  </span>
+                                )}
+                                {source.publisher?.factualityRating && (
+                                  <span 
+                                    className="border border-border rounded px-1.5 py-0.5 hover:text-blue-600 cursor-pointer"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      window.open(`https://mediabiasfactcheck.com/?s=${encodeURIComponent(source.publisher?.name || "")}`, "_blank");
+                                    }}
+                                  >
+                                    Factuality ↗
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <h4 className="text-sm font-bold leading-snug text-foreground mb-1.5 line-clamp-2 hover:text-blue-600 transition-colors">
+                            {source.title}
+                          </h4>
+                          {source.excerpt && (
+                            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                              {source.excerpt}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground mt-3 pt-3 border-t border-border">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {formatDistanceToNow(new Date(source.publishedAt || Date.now()))} ago
+                          </span>
+                          <span className="flex items-center gap-1 text-blue-600 cursor-pointer">
+                            Read article <ChevronRight className="w-3 h-3" />
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })() : (
+                <div className="bg-card border border-border rounded-xl py-10 text-center">
+                  <p className="text-muted-foreground text-sm">No other sources found for this filter yet.</p>
+                </div>
+              )}
+
+              <div className="flex justify-center pt-5">
+                <Button variant="outline"
+                  className="rounded-full font-bold text-sm px-8 border-2 border-border hover:border-primary/50"
+                  onClick={() => article?.clusterId ? setLocation(`/compare/${article.clusterId}`) : setLocation("/")}>
+                  Show me coverage in balance <ChevronRight className="w-3 h-3 ml-1" />
+                </Button>
+              </div>
+            </section>
+
+            {/* ── SECTION 2: Trending on this topic ── */}
+            <TrendingTopicsSection category={article?.categories?.[0]?.slug} currentId={article?.id} />
+
+            {/* ── SECTION 3: Your viewpoint (uses similarRaw for bias-matched picks) ── */}
+            <YourViewpointSection
+              relatedArticles={similarRaw}
+              excludeIds={new Set(filteredRelated.slice(0, 6).map((a: any) => a.id))}
+            />
+
+            {/* ── Related articles (different event, same category) ── always shown */}
+            {(() => {
+              const shownIds = new Set(filteredRelated.slice(0, 6).map((a: any) => a.id));
+              const trueRelated = relatedRaw.filter(a => !shownIds.has(a.id));
+              
+              if (trueRelated.length === 0) return null;
+              
+              return (
+                <section>
+                  <div className="mb-4">
+                    <h3 className="text-lg font-bold text-foreground">Related articles</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Other stories on the same topic
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {trueRelated.slice(0, 4).map((a: any) => (
+                      <div
+                        key={a.id}
+                        className="bg-card border border-border hover:border-primary/30 rounded-xl p-4 cursor-pointer transition-colors"
+                        onClick={() => setLocation(`/article/${a.id}`)}
+                      >
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <BiasChip bias={(a.bias || "center") as any} size="xs" />
+                          <span className="text-xs font-bold text-muted-foreground truncate">
+                            {a.publisher?.name}
+                          </span>
+                        </div>
+                        <h4 className="text-[15px] font-semibold leading-snug text-foreground line-clamp-2">
+                          {a.title}
+                        </h4>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          {formatDistanceToNow(new Date(a.publishedAt || Date.now()))} ago
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              );
+            })()}
+
+            {/* Inside Publisher */}
+            <section className="bg-card border border-border rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-xl font-bold text-foreground">
+                  Inside {article.publisher?.name || "Publisher"}
+                </h3>
+                <span
+                  className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
+                  onClick={() => setLocation("/publishers")}
+                >
+                  See more from {article.publisher?.name} <ChevronRight className="w-3 h-3" />
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                {publisherArticles.length > 0 ? (
+                  publisherArticles.map(pubArt => (
+                    <div
+                      key={pubArt.id}
+                      className="group cursor-pointer flex flex-col"
+                      onClick={() => setLocation(`/article/${pubArt.id}`)}
+                    >
+                      <div className="aspect-[16/10] rounded-lg bg-secondary mb-3 overflow-hidden border border-border">
+                        {pubArt.heroImageUrl && !pubArt.heroImageUrl.includes("placeholder") ? (
+                          <img
+                            src={pubArt.heroImageUrl}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                            alt={article.title}
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className={`w-full h-full flex flex-col justify-center p-4 bg-background border-l-[6px] ${
+                            (pubArt.bias === "pro_establishment" || (pubArt.publisher?.biasRating?.toLowerCase().includes("pro_establishment"))) ? "border-blue-500/30" :
+                            (pubArt.bias === "pro_opposition" || (pubArt.publisher?.biasRating?.toLowerCase().includes("pro_opposition"))) ? "border-red-500/30" :
+                            "border-muted/40"
+                          }`}>
+                            <div className="text-[10px] font-black uppercase tracking-[0.1em] text-muted-foreground/40 mb-2">
+                              Full Coverage Report
+                            </div>
+                            <h4 className="text-[11px] font-bold leading-tight line-clamp-3 text-foreground/50">
+                              {pubArt.title}
+                            </h4>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <BiasChip
+                          bias={(pubArt.bias ||
+                            (pubArt.publisher?.biasRating?.toLowerCase().includes("left") ? "left"
+                              : pubArt.publisher?.biasRating?.toLowerCase().includes("right") ? "right"
+                                : "center")) as any}
+                          size="xs"
+                        />
+                        <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                          {pubArt.categories?.[0]?.name || "General"}
+                        </span>
+                      </div>
+                      <h4 className="text-[15px] font-semibold leading-snug text-foreground group-hover:text-blue-600 transition-colors line-clamp-3">
+                        {pubArt.title}
+                      </h4>
+                      <p className="text-xs text-muted-foreground mt-2 font-bold flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-blue-500" />
+                        Updated {formatDistanceToNow(new Date(pubArt.publishedAt || Date.now()))} ago
+                      </p>
                     </div>
                   ))
                 ) : (
-                  <div className="py-12 text-center bg-secondary/20 rounded-xl border border-dashed border-border">
-                    <p className="text-sm font-medium text-muted-foreground">No {sourceTab !== "all" ? sourceTab : ""} coverage found for this specific story.</p>
-                    <Button variant="ghost" onClick={() => setSourceTab("all")} className="mt-2 text-primary font-bold">View All Coverage</Button>
-                  </div>
+                  <p className="text-muted-foreground text-sm italic col-span-3">
+                    No recent articles from this publisher yet.
+                  </p>
                 )}
               </div>
-
-              {filteredSources.length > visibleCount && (
-                <button 
-                  onClick={() => setVisibleCount(prev => prev + 12)}
-                  className="mt-8 px-6 py-2 text-xs font-bold border border-foreground rounded hover:bg-secondary transition-colors uppercase tracking-widest block mx-auto"
-                >
-                  Show More coverage ({filteredSources.length - visibleCount} remaining)
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* ── RIGHT: Coverage sidebar ── */}
-          <aside className="space-y-4">
-            {/* Coverage Details */}
-            <div className="bg-[#f0ece1] dark:bg-zinc-900 border border-card-border rounded p-4 text-[11px] font-medium text-foreground pb-5">
-              <h3 className="text-xs font-bold mb-3">Coverage Details</h3>
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-muted-foreground"><span className="text-zinc-600 dark:text-zinc-400">Total News Sources</span><span className="font-bold text-foreground">{sources.total}</span></div>
-                <div className="flex justify-between items-center text-muted-foreground"><span className="bias-left-text">Leaning Left</span><span className="font-bold">{sources.left}</span></div>
-                <div className="flex justify-between items-center text-muted-foreground"><span className="bias-right-text">Leaning Right</span><span className="font-bold">{sources.right}</span></div>
-                <div className="flex justify-between items-center text-muted-foreground"><span className="bias-center-text">Center</span><span className="font-bold">{sources.center}</span></div>
-                <div className="flex justify-between items-center pt-1 mt-1 border-t border-border/30"><span className="text-zinc-600 dark:text-zinc-400">Last Updated</span><span className="font-bold text-foreground">Recently</span></div>
-                <div className="flex justify-between items-center"><span className="text-zinc-600 dark:text-zinc-400">Bias Distribution</span><span className="font-bold text-foreground">{biasNums.left}% Left</span></div>
-              </div>
-            </div>
-
-            {/* Bias Distribution Chart */}
-            <div className="bg-[#e4e1d6] dark:bg-zinc-800/50 rounded p-4">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-xs font-bold">Bias Distribution <ExternalLink className="w-3 h-3 inline pb-0.5 opacity-50"/></h3>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              </div>
-              <p className="text-[10px] text-muted-foreground mb-4">
-                • {sources.total > 0 ? Math.round((sources.left / sources.total) * 100) : 0}% of the sources lean Left
-              </p>
-              
-              <div className="grid grid-cols-3 gap-1.5 mb-2 h-[200px] items-end pb-2 border-b border-border/50">
-                <div className="flex flex-col items-center gap-1 relative h-full justify-end">
-                  <div className="absolute inset-0 bg-blue-500/10 rounded-t-sm pointer-events-none border-x border-t border-blue-500/20" style={{height: `${Math.max(10, biasNums.left)}%`, top: "auto", bottom: 0}}></div>
-                  {allStoryArticles.filter((a: any) => a.bias === "left").slice(0, 5).map((a: any) => (
-                    <div key={a.id} className="w-5 h-5 rounded-full bg-blue-600 border border-blue-400 text-[8px] flex items-center justify-center font-bold z-10 text-white shadow-sm overflow-hidden" title={a.publisher?.name}>
-                      {a.publisher?.logoUrl ? <img src={a.publisher.logoUrl} alt="" className="w-full h-full object-cover" /> : a.publisher?.name?.[0]}
-                    </div>
-                  ))}
-                  {sources.left > 5 && (
-                    <div className="w-5 h-5 rounded-full bg-blue-700 border border-blue-400 text-[7px] flex items-center justify-center font-bold z-10 text-white shadow-sm italic">
-                      +{sources.left - 5}
-                    </div>
-                  )}
-                  <span className="text-[9px] font-bold mt-1 text-blue-700 dark:text-blue-400 uppercase">Left</span>
-                </div>
-                
-                <div className="flex flex-col items-center gap-1 relative h-full justify-end">
-                  <div className="absolute inset-0 bg-zinc-500/10 rounded-t-sm pointer-events-none border-x border-t border-zinc-500/20" style={{height: `${Math.max(10, biasNums.center)}%`, top: "auto", bottom: 0}}></div>
-                  {allStoryArticles.filter((a: any) => a.bias === "center").slice(0, 5).map((a: any) => (
-                    <div key={a.id} className="w-5 h-5 rounded-full bg-zinc-600 border border-zinc-400 text-[8px] flex items-center justify-center font-bold z-10 text-white shadow-sm overflow-hidden" title={a.publisher?.name}>
-                       {a.publisher?.logoUrl ? <img src={a.publisher.logoUrl} alt="" className="w-full h-full object-cover" /> : a.publisher?.name?.[0]}
-                    </div>
-                  ))}
-                  {sources.center > 5 && (
-                    <div className="w-5 h-5 rounded-full bg-zinc-700 border border-zinc-400 text-[7px] flex items-center justify-center font-bold z-10 text-white shadow-sm italic">
-                      +{sources.center - 5}
-                    </div>
-                  )}
-                  <span className="text-[9px] font-bold mt-1 text-zinc-700 dark:text-zinc-400 uppercase">Center</span>
-                </div>
-
-                <div className="flex flex-col items-center gap-1 relative h-full justify-end">
-                  <div className="absolute inset-0 bg-red-500/10 rounded-t-sm pointer-events-none border-x border-t border-red-500/20" style={{height: `${Math.max(10, biasNums.right)}%`, top: "auto", bottom: 0}}></div>
-                  {allStoryArticles.filter((a: any) => a.bias === "right").slice(0, 5).map((a: any) => (
-                    <div key={a.id} className="w-5 h-5 rounded-full bg-red-600 border border-red-400 text-[8px] flex items-center justify-center font-bold z-10 text-white shadow-sm overflow-hidden" title={a.publisher?.name}>
-                       {a.publisher?.logoUrl ? <img src={a.publisher.logoUrl} alt="" className="w-full h-full object-cover" /> : a.publisher?.name?.[0]}
-                    </div>
-                  ))}
-                  {sources.right > 5 && (
-                    <div className="w-5 h-5 rounded-full bg-red-700 border border-red-400 text-[7px] flex items-center justify-center font-bold z-10 text-white shadow-sm italic">
-                      +{sources.right - 5}
-                    </div>
-                  )}
-                  <span className="text-[9px] font-bold mt-1 text-red-700 dark:text-red-400 uppercase">Right</span>
-                </div>
-              </div>
-
-              <div className="text-[9px] text-muted-foreground mt-4 text-center italic">
-                Scanning across {sources.total} global coverage points...
-              </div>
-            </div>
-
-            {/* Narrative Shift Visualization */}
-            <NarrativeShift history={article.biasHistory as any[]} />
-
-            {/* Factuality - PREMIUM */}
-            <div className="bg-[#f0ece1] dark:bg-zinc-900 border border-card-border rounded p-4">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-xs font-bold flex items-center gap-1">Factuality <svg className="w-3 h-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></h3>
-                <Lock className="w-3 h-3 text-muted-foreground" />
-              </div>
-              <p className="text-[9px] text-muted-foreground mb-3">To view factuality data please <a href="#" className="underline">Upgrade to Premium</a></p>
-              
-              <div className="space-y-1.5 opacity-40 blur-[1px]">
-                 <div className="h-5 bg-zinc-300 dark:bg-zinc-700 w-full" />
-                 <div className="h-5 bg-zinc-300 dark:bg-zinc-700 w-3/4" />
-              </div>
-            </div>
-
-            {/* Ownership - PREMIUM */}
-            <div className="bg-[#f0ece1] dark:bg-zinc-900 border border-card-border rounded p-4">
-               <div className="flex items-center justify-between mb-1">
-                <h3 className="text-xs font-bold flex items-center gap-1">Ownership <svg className="w-3 h-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></h3>
-                <Lock className="w-3 h-3 text-muted-foreground" />
-              </div>
-              <p className="text-[9px] text-muted-foreground mb-3">To view ownership data please <a href="#" className="underline">Upgrade to Vantage</a></p>
-              
-              <div className="flex gap-1 h-2 rounded overflow-hidden opacity-40 blur-[1px]">
-                 <div className="w-[40%] bg-blue-300" />
-                 <div className="w-[25%] bg-blue-200" />
-                 <div className="w-[20%] bg-red-200" />
-                 <div className="w-[15%] bg-stone-300" />
-              </div>
-            </div>
-
-            {/* Similar News Topics */}
-            <div className="bg-card border border-card-border rounded p-4">
-              <h3 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-3">Similar News Topics</h3>
-              <div className="space-y-2">
-                {(allData ?? []).slice(0, 4).map((a: ArticleWithDetails) => (
-                  <div key={a.id} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black text-white flex-shrink-0 ${
-                        a.bias === "left" ? "bg-blue-500" : a.bias === "right" ? "bg-red-500" : "bg-violet-500"
-                      }`}>
-                        {a.publisher?.name?.[0]}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold line-clamp-1">{a.categories?.[0]?.name ?? "News"}</p>
-                        <p className="text-[10px] text-muted-foreground">{a.publisher?.name}</p>
-                      </div>
-                    </div>
-                    <button className="text-muted-foreground hover:text-foreground ml-2 flex-shrink-0">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <button className="w-full mt-3 py-2 text-xs font-semibold border border-border rounded hover:bg-secondary transition-colors">
-                Show All
-              </button>
-            </div>
-          </aside>
-        </div>
-
-        {/* ── PHASE 9: DIVERSIFIED DISCOVERY SECTIONS ── */}
-        <div className="mt-16 border-t border-border pt-12 space-y-16">
-          
-          {/* Section 1: Inside the Category (Grid) */}
-          {categoryDataResult?.articles && categoryDataResult.articles.length > 0 && (
-            <section>
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold tracking-tight">Inside {article.categories?.[0]?.name || "this category"}</h2>
-                <Button variant="ghost" className="text-xs font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1">
-                  View Category Feed <ArrowLeft className="w-3 h-3 rotate-180" />
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {categoryDataResult.articles.filter((a: ArticleWithDetails) => a.id !== id).slice(0, 3).map((a: ArticleWithDetails) => (
-                  <StoryCard key={a.id} article={a} variant="standard" />
-                ))}
-              </div>
             </section>
-          )}
+          </div>{/* /left col inner */}
+          </div>{/* /left column */}
+        </div>{/* /two-column layout */}
 
-          {/* Section 2: The Blindspot (Featured Card) */}
-          {blindspotDataResult && (
-            <section className="bg-zinc-950 text-white rounded-xl p-8 relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-primary/20 blur-[100px] rounded-full -mr-32 -mt-32" />
-              <div className="relative z-10 flex flex-col lg:flex-row gap-8 items-center">
-                <div className="flex-1">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-[10px] font-black uppercase tracking-widest mb-4">
-                    <div className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse" />
-                    Recommended Blindspot
-                  </div>
-                  <h2 className="text-3xl font-bold mb-4 leading-tight">Step outside your bias bubble</h2>
-                  <p className="text-zinc-400 text-sm mb-6 max-w-xl">
-                    Our AI identified this story being heavily reported by sources you rarely read. 
-                    Expand your perspective by exploring this highly-discussed topic among contrasting viewpoints.
-                  </p>
-                  <Button variant="outline" className="text-white border-white/20 hover:bg-white/10" onClick={() => setLocation(`/article/${blindspotDataResult.leftBlindspot?.[0]?.id || blindspotDataResult.rightBlindspot?.[0]?.id}`)}>
-                    Explore Blindspot Feed
-                  </Button>
-                </div>
-                <div className="w-full lg:w-[400px] transform hover:scale-[1.02] transition-transform duration-500">
-                  {blindspotDataResult.leftBlindspot?.[0] && (
-                    <StoryCard article={blindspotDataResult.leftBlindspot[0]} variant="standard" />
-                  )}
-                </div>
-              </div>
-            </section>
-          )}
+          {/* ── RIGHT SIDEBAR ── */}
+          <motion.aside
+            className="space-y-6 lg:sticky lg:top-20"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.6, delay: 0.2, ease: "easeOut" }}
+          >
+            
+            {/* Coverage Details (Moved to top right) */}
+            <CoverageDetailsCard biasStats={biasStats} sources={allSources} />
 
-          {/* Section 3: More from Publisher (Horizontal Carousel) */}
-          {publisherDataResult?.articles && publisherDataResult.articles.length > 0 && (
-            <section>
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  {article.publisher?.logoUrl && <img src={article.publisher.logoUrl} className="w-6 h-6 rounded-full" alt="" />}
-                  <h2 className="text-xl font-bold tracking-tight">More from {article.publisher?.name}</h2>
-                </div>
-              </div>
-              <div className="overflow-hidden" ref={emblaRef}>
-                <div className="flex gap-6">
-                  {publisherDataResult.articles.filter((a: ArticleWithDetails) => a.id !== id).map((a: ArticleWithDetails) => (
-                    <div key={a.id} className="flex-[0_0_280px] min-w-0">
-                      <StoryCard article={a} variant="standard" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-          )}
+            {article.clusterId && (
+              <>
+                <MarketImpact clusterId={article.clusterId} />
+                <EntityQuoteTracker clusterId={article.clusterId} />
+              </>
+            )}
 
-          {/* Section 4: Global Perspectives (Text Index) */}
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-12 pt-8 border-t border-border/50">
-            <div>
-              <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-4">Top in World</h3>
-              <div className="space-y-3">
-                {(allData ?? []).slice(0, 5).map((a: ArticleWithDetails) => (
-                  <a key={a.id} onClick={() => setLocation(`/article/${a.id}`)} className="block group cursor-pointer">
-                    <p className="text-xs font-bold leading-snug group-hover:text-primary transition-colors">{a.title}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-[10px] text-muted-foreground">{a.publisher?.name}</span>
-                      <BiasChip bias={a.bias} size="xs" />
-                    </div>
-                  </a>
-                ))}
-              </div>
+            <div className="bg-card border border-border rounded-2xl p-6">
+              <TrendsDonut 
+                left={biasStats.left}
+                center={biasStats.center}
+                right={biasStats.right}
+                total={displaySourceCount}
+                onCompareClick={() => article?.clusterId && setLocation(`/compare/${article.clusterId}`)}
+              />
+              
+              <MediaBiasDistribution 
+                sources={sourcesForChart}
+                onAllSourcesClick={() => article?.clusterId && setLocation(`/compare/${article.clusterId}`)}
+              />
             </div>
-            <div>
-              <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-4">Trending Today</h3>
-              <div className="space-y-3">
-                {(allData ?? []).slice(5, 10).map((a: ArticleWithDetails) => (
-                  <a key={a.id} onClick={() => setLocation(`/article/${a.id}`)} className="block group cursor-pointer">
-                    <p className="text-xs font-bold leading-snug group-hover:text-primary transition-colors">{a.title}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-[10px] text-muted-foreground">{a.publisher?.name}</span>
-                      <BiasChip bias={a.bias} size="xs" />
-                    </div>
-                  </a>
-                ))}
-              </div>
-            </div>
-            <div className="bg-secondary/20 rounded-xl p-6 border border-border/50">
-              <h3 className="text-xs font-black uppercase tracking-widest mb-4">Daily Edition</h3>
-              <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
-                Get more from every story with our personalized briefing. No algorithms, just the facts from all sides.
-              </p>
-              <div className="flex gap-2">
-                <input className="flex-1 bg-background border border-border rounded px-3 py-1.5 text-xs" placeholder="email@example.com" />
-                <Button size="sm">Join</Button>
-              </div>
-            </div>
-          </section>
+            
+            {/* Step outside bias bubble CTA (Moved to sidebar) */}
 
-        </div>
-      </div>
+            {/* Story Impact Profiles — using synchronized count */}
+            {article.clusterId && <StoryImpactRings clusterId={article.clusterId} sourceCount={displaySourceCount} />}
+
+            {/* Who broke this story */}
+            <WhoBrokeStory sources={allSources} />
+
+            {/* Similar topics */}
+            <SimilarTopics article={article} />
+
+            {/* Story timeline (Lineage) */}
+            <StoryTimeline clusterId={article.clusterId || ""} />
+
+            {/* Geographic coverage */}
+            {article.clusterId && <GeographicCoverage sources={allSources} />}
+          </motion.aside>
+        </div>{/* /grid */}
+      </main>
 
       <NewsFooter />
     </div>

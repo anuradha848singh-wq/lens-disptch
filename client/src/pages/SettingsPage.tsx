@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -15,6 +16,7 @@ import { useAuth } from "@/lib/auth-context";
 export default function SettingsPage() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [, setLocation] = useLocation();
   const [localSearch, setLocalSearch] = useState("");
   
   const { data: settings, isLoading } = useQuery({
@@ -105,7 +107,7 @@ export default function SettingsPage() {
       <div className="min-h-screen flex flex-col items-center justify-center p-4">
         <h1 className="text-2xl font-bold mb-4">Settings</h1>
         <p className="text-muted-foreground mb-4">Please log in to manage your news settings.</p>
-        <Button onClick={() => window.location.href = "/"}>Go Home</Button>
+        <Button onClick={() => setLocation("/")}>Go Home</Button>
       </div>
     );
   }
@@ -227,7 +229,7 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
               <CardFooter className="flex justify-between border-t py-4">
-                <Button variant="ghost" type="button" onClick={() => window.location.href = "/"}>Cancel</Button>
+                <Button variant="ghost" type="button" onClick={() => setLocation("/")}>Cancel</Button>
                 <Button type="submit" className="gap-2" disabled={updateMutation.isPending}>
                   {updateMutation.isPending ? "Saving..." : (
                     <>

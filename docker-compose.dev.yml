@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: ankane/pgvector:v0.5.1
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=devpassword
+      - POSTGRES_DB=thelensdispatch
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    restart: unless-stopped
+
+
+volumes:
+  postgres_dev_data:

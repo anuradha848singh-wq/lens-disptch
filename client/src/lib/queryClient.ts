@@ -47,11 +47,58 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      staleTime: 60 * 1000, // 1 minute
+      gcTime: 10 * 60 * 1000, // 10 minutes
+      retry: 1,
     },
     mutations: {
-      retry: false,
+      retry: 1,
     },
   },
 });
+
+// Stale-While-Revalidate Query Cache Persistence
+if (typeof window !== "undefined") {
+  // Load cached queries on boot
+  try {
+    const cachedData = localStorage.getItem("dispatch_news_cache");
+    if (cachedData) {
+      const parsed = JSON.parse(cachedData);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((item: any) => {
+          if (item.queryKey && item.data) {
+            queryClient.setQueryData(item.queryKey, item.data);
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[QueryCache] Failed to restore news cache:", e);
+  }
+
+  // Subscribe to changes to persist whitelisted endpoints
+  const whitelist = ["/api/homepage", "/api/categories", "/api/blindspots", "/api/trending"];
+  
+  queryClient.getQueryCache().subscribe((event) => {
+    if (event.type === "updated" && event.action.type === "success") {
+      const queries = queryClient.getQueryCache().getAll();
+      const toSave = queries
+        .filter(q => {
+          if (q.state.status !== "success") return false;
+          const firstKey = Array.isArray(q.queryKey) ? q.queryKey[0] : null;
+          return typeof firstKey === "string" && whitelist.includes(firstKey);
+        })
+        .map(q => ({
+          queryKey: q.queryKey,
+          data: q.state.data
+        }));
+
+      try {
+        localStorage.setItem("dispatch_news_cache", JSON.stringify(toSave));
+      } catch (e) {
+        console.warn("[QueryCache] Storage limit reached, failed to persist:", e);
+      }
+    }
+  });
+}
+
