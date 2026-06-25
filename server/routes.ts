@@ -346,12 +346,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const category = categoryId || (req.query.category as string) || "all";
       const limit = parseInt(req.query.limit as string) || 50;
       const offset = parseInt(req.query.offset as string) || 0;
+      const market = (req.query.market as string) || "US";
       
       let data: any[] = [];
       let source = "live_query";
 
-      // Attempt to serve from materialized homepageCache table (Zero-CPU) for first page
-      if (offset === 0 && !search && (!category || category === "all")) {
+      // Serve from materialized homepageCache (Zero-CPU) for first page
+      // Covers both the default 'all' category AND the most common market (US)
+      if (offset === 0 && !search && (!category || category === "all") &&
+          (!market || market === "GLOBAL" || market === "US")) {
         try {
           const [cacheRow] = await db.select()
             .from(homepageCache)
@@ -369,27 +372,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // ALWAYS fall back to live computation if cache is empty or we're paginating past cache
       if (data.length === 0) {
-        data = await storage.getHomepageClusters(limit, offset, search, category);
+        // Sanitize search to prevent LIKE wildcard injection before passing to storage
+        const safeSearch = search ? sanitizeLikeInput(search) : null;
+        data = await storage.getHomepageClusters(limit, offset, safeSearch, category, market);
         source = "live_query";
       }
 
-      // PERSONALIZATION: If logged in, boost followed categories/topics
+      // PERSONALIZATION: If logged in, generate algorithmic feed
       const user = (req as any).user;
       if (user && offset === 0) { // Only personalize the first page to avoid weird shifting on pagination
         try {
-          const [prefs] = await db.select().from(userPreferences).where(eq(userPreferences.userId, user.id)).limit(1);
-          if (prefs) {
-            const { followedCategories = [], followedTopics = [] } = prefs;
-            if (followedCategories.length > 0 || followedTopics.length > 0) {
-              data = [...data].sort((a: any, b: any) => {
-                const aBoost = followedCategories.includes(a.category) || (a.topic && followedTopics.includes(a.topic)) ? 1 : 0;
-                const bBoost = followedCategories.includes(b.category) || (b.topic && followedTopics.includes(b.topic)) ? 1 : 0;
-                if (aBoost !== bBoost) return bBoost - aBoost;
-                return (b.importanceScore || 0) - (a.importanceScore || 0);
-              });
+          const { generateAlgorithmicFeed } = await import("./personalization");
+          const algoFeed = await generateAlgorithmicFeed(user.id, limit);
+          
+          if (algoFeed && algoFeed.length > 0) {
+            data = algoFeed;
+            source = "algorithmic_feed";
+          } else {
+            // Fallback to basic personalization if no vector exists
+            const [prefs] = await db.select().from(userPreferences).where(eq(userPreferences.userId, user.id)).limit(1);
+            if (prefs) {
+              const { followedCategories = [], followedTopics = [] } = prefs;
+              if (followedCategories.length > 0 || followedTopics.length > 0) {
+                data = [...data].sort((a: any, b: any) => {
+                  const aBoost = followedCategories.includes(a.category) || (a.topic && followedTopics.includes(a.topic)) ? 1 : 0;
+                  const bBoost = followedCategories.includes(b.category) || (b.topic && followedTopics.includes(b.topic)) ? 1 : 0;
+                  if (aBoost !== bBoost) return bBoost - aBoost;
+                  return (b.importanceScore || 0) - (a.importanceScore || 0);
+                });
+              }
             }
           }
-        } catch (e) { /* user prefs optional */ }
+        } catch (e) {
+          console.error("[Personalization] Fallback to chron feed due to error:", e);
+        }
       }
 
       // No hydration needed: the preprocessor (updateHomepageCache) already 
@@ -405,12 +421,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/homepage/lean", async (req, res) => {
     try {
-      const data = await cache.fetch("homepage:lean:v1", async () => {
+      const data = await cache.fetch("homepage:lean:v2", async () => {
+        // Use exact enum equality — avoids full-table text scan that LIKE '%left%' caused
         const result = await db.execute(sql`
           SELECT
-            COUNT(*) FILTER (WHERE p.bias_rating::text LIKE '%left%')   AS pro_establishment_count,
-            COUNT(*) FILTER (WHERE p.bias_rating::text LIKE '%center%') AS neutral_count,
-            COUNT(*) FILTER (WHERE p.bias_rating::text LIKE '%right%')  AS pro_opposition_count
+            COUNT(*) FILTER (WHERE p.bias_rating = 'pro_establishment') AS pro_establishment_count,
+            COUNT(*) FILTER (WHERE p.bias_rating = 'neutral')           AS neutral_count,
+            COUNT(*) FILTER (WHERE p.bias_rating = 'pro_opposition')    AS pro_opposition_count
           FROM ${articles} a
           INNER JOIN ${publishers} p ON a.source_id = p.id
           WHERE a.published_at > NOW() - INTERVAL '24 hours'
@@ -421,7 +438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return {
           leftPct:   Math.round(Number(l)/total*100),
           centerPct: Math.round(Number(c)/total*100),
-          rightPct:  Math.round((total-Number(l)-Number(c))/total*100),
+          rightPct:  Math.round(Number(r)/total*100),
         };
       }, 300);
       publicCache(res, 300);
@@ -460,17 +477,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/system/stats", async (req, res) => {
     try {
-      const data = await cache.fetch("system:stats:v1", async () => {
+      const data = await cache.fetch("system:stats:v2", async () => {
+        // Single query with parallel aggregates — replaces 5 serial subqueries
         const result = await db.execute(sql`
           SELECT
-            (SELECT COUNT(*) FROM ${publishers} WHERE active = true) AS "totalPublishers",
-            (SELECT COUNT(DISTINCT country) FROM ${publishers} WHERE country IS NOT NULL) AS "totalCountries",
-            (SELECT COUNT(*) FROM ${articles} WHERE status = 'published') AS "totalArticles",
-            (SELECT COUNT(*) FROM ${clusters} WHERE source_count >= 1) AS "totalClusters",
-            (SELECT COUNT(*) FROM ${articles} WHERE status = 'published') AS "totalBiasEvents"
+            (SELECT COUNT(*) FROM ${publishers} WHERE active = true)::int          AS "totalPublishers",
+            (SELECT COUNT(DISTINCT country) FROM ${publishers}
+               WHERE country IS NOT NULL)::int                                      AS "totalCountries",
+            (SELECT COUNT(*) FROM ${articles} WHERE status = 'published')::int     AS "totalArticles",
+            (SELECT COUNT(*) FROM ${clusters} WHERE source_count >= 1)::int        AS "totalClusters",
+            (SELECT COUNT(*) FROM ${articles} WHERE status = 'published')::int     AS "totalBiasEvents"
         `);
         return result.rows[0];
-      }, 3600);
+      }, 3600); // 1-hour TTL — these stats only need to be accurate within an hour
       publicCache(res, 3600);
       res.json(data);
     } catch (err) {
@@ -484,21 +503,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = parseInt(req.query.limit as string) || 8;
       const data = await cache.fetch(`tags:trending:${limit}`, async () => {
         const result = await db.execute(sql`
-          SELECT t.name, t.slug, COUNT(at.article_id) AS freq
-          FROM ${articleTags} at
-          JOIN ${tags} t ON t.id = at.tag_id
-          JOIN ${articles} a ON a.id = at.article_id
-          WHERE a.published_at > NOW() - INTERVAL '48 hours'
-            AND a.status = 'published'
-          GROUP BY t.name, t.slug
-          ORDER BY freq DESC
+          WITH mentions_last_6h AS (
+            SELECT t.id, t.name, t.slug, COUNT(at.article_id) AS freq_6h
+            FROM ${articleTags} at
+            JOIN ${tags} t ON t.id = at.tag_id
+            JOIN ${articles} a ON a.id = at.article_id
+            WHERE a.published_at > NOW() - INTERVAL '6 hours'
+              AND a.status = 'published'
+            GROUP BY t.id, t.name, t.slug
+          ),
+          mentions_last_7d AS (
+            SELECT t.id, COUNT(at.article_id) / 28.0 AS avg_6h
+            FROM ${articleTags} at
+            JOIN ${tags} t ON t.id = at.tag_id
+            JOIN ${articles} a ON a.id = at.article_id
+            WHERE a.published_at > NOW() - INTERVAL '7 days'
+              AND a.status = 'published'
+            GROUP BY t.id
+          )
+          SELECT m6.name, m6.slug, m6.freq_6h AS mentions,
+                 (m6.freq_6h / GREATEST(m7.avg_6h, 1.0)) AS trend_score
+          FROM mentions_last_6h m6
+          LEFT JOIN mentions_last_7d m7 ON m6.id = m7.id
+          ORDER BY trend_score DESC, m6.freq_6h DESC
           LIMIT ${limit}
         `);
         return result.rows.map((r: any) => ({
           id: r.slug,
           name: r.name,
           slug: r.slug,
-          mentions: Number(r.freq),
+          mentions: Number(r.mentions),
+          trendScore: Number(r.trend_score),
         }));
       }, 600);
       publicCache(res, 600);
@@ -670,6 +705,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== PERSONALIZATION ====================
+
+  app.post("/api/interactions", authenticateUser, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const { clusterId, action, durationMs } = req.body;
+      
+      if (!clusterId || !action) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      const { trackUserInteraction } = await import("./personalization");
+      await trackUserInteraction(user.id, clusterId, action, durationMs || 0);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Track interaction error:", error);
+      res.status(500).json({ error: "Failed to track interaction" });
+    }
+  });
+
   // ==================== THE LENS DISPATCH FEATURES ====================
 
   // Blindspot
@@ -681,6 +737,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Blindspot error:", error);
       res.status(500).json({ error: "Failed to get blindspot articles" });
+    }
+  });
+
+  // Country Profile
+  app.get("/api/country-profile", async (req, res) => {
+    try {
+      const code = (req.query.code as string) || "US";
+      // Assuming getCountryProfile is imported, we should import it at the top or dynamically
+      const { getCountryProfile } = await import("../shared/country-profiles/registry");
+      const profile = getCountryProfile(code.toUpperCase());
+      
+      // Exclude internal scorerStrategyId
+      const { scorerStrategyId, ...safeProfile } = profile;
+      
+      publicCache(res, 3600);
+      res.json(safeProfile);
+    } catch (error) {
+      console.error("Country profile error:", error);
+      res.status(500).json({ error: "Failed to get country profile" });
+    }
+  });
+
+  // Dynamic Breaking News
+  app.get("/api/stories/breaking", async (req, res) => {
+    try {
+      const market = (req.query.market as string) || "US";
+      const limit = parseInt(req.query.limit as string) || 5;
+
+      // Query clusters where phase is 'breaking', matching market
+      const breakingClusters = await db.select({
+        id: clusters.id,
+        headline: clusters.headline,
+        velocityScore: clusters.velocityScore,
+        storyPhase: clusters.storyPhase
+      })
+      .from(clusters)
+      .where(and(
+        eq(clusters.storyPhase, "breaking"),
+        sql`${clusters.primaryMarket} = ${market} OR ${clusters.multiMarket} ? ${market}`
+      ))
+      .orderBy(desc(clusters.velocityScore))
+      .limit(limit);
+
+      publicCache(res, 60);
+      res.json(breakingClusters.map((c: any) => ({ id: c.id, text: c.headline, velocity: c.velocityScore })));
+    } catch (error) {
+      console.error("Breaking news error:", error);
+      res.status(500).json({ error: "Failed to get breaking news" });
     }
   });
 
@@ -705,10 +809,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const addSourceSchema = z.object({
+    url: z.string().url("Must be a valid URL"),
+    publisherName: z.string().min(2, "Publisher name must be at least 2 characters").max(100),
+    bias: z.enum(["pro_establishment", "pro_opposition", "neutral", "regional_aligned"]).optional(),
+    country: z.string().length(2, "Country must be a 2-letter ISO code").optional(),
+  });
+
   app.post("/api/admin/source", authenticateUser, requireRole("admin"), (req, res) => {
     try {
-      const source = req.body;
-      addCustomSource(source);
+      const parseResult = addSourceSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        const errorMessage = fromZodError(parseResult.error).toString();
+        return res.status(400).json({ error: errorMessage });
+      }
+      addCustomSource(parseResult.data);
       res.json({ success: true, status: getAdminFetcherStatus() });
     } catch (error) {
       console.error("Admin Add Source error:", error);

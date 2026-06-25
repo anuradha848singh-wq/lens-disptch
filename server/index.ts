@@ -16,20 +16,34 @@ import {
 const app = express();
 app.use(compression({ level: 6 }));
 app.use(helmet({
-  contentSecurityPolicy: false, // Vite handle CSP during development
+  contentSecurityPolicy: process.env.NODE_ENV === "production" ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],   // unsafe-inline needed for Vite HMR in staging
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https://images.weserv.nl", "blob:", "https:"],
+      connectSrc: ["'self'", "https://api.jina.ai"],
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"],
+    }
+  } : false, // Disabled in dev to allow Vite HMR
 }));
 app.use(cookieParser());
 
-// CORS Middleware for split deployment (Vercel Frontend + Railway Backend)
 // CORS: only allow explicitly-listed origins (env ALLOWED_ORIGINS comma-separated)
+// localhost origins are dev-only — never leak into production
 const ALLOWED_ORIGINS = new Set(
   [
     process.env.CORS_ORIGIN,
     ...(process.env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()),
-    "http://localhost:5000",
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:5174"
+    // Only add localhost in non-production builds
+    ...(process.env.NODE_ENV !== "production" ? [
+      "http://localhost:5000",
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:5174",
+    ] : []),
   ].filter(Boolean)
 );
 
@@ -72,7 +86,7 @@ app.use((req: any, res, next) => {
     const start = Date.now();
     const reqPath = req.path;
 
-    // Log API requests to structured file logger
+    // Log API requests to structured file logger ONCE (removed duplicate console listener)
     if (reqPath.startsWith("/api")) {
       res.on("finish", () => {
         const duration = Date.now() - start;
@@ -81,13 +95,7 @@ app.use((req: any, res, next) => {
           req.user?.id,
           res.statusCode >= 400 ? res.statusMessage : undefined
         );
-      });
-    }
-
-    // Also log to Vite's dev console
-    if (reqPath.startsWith("/api")) {
-      res.on("finish", () => {
-        const duration = Date.now() - start;
+        // Single unified log line in dev console
         log(`${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
       });
     }
@@ -160,17 +168,11 @@ process.on("uncaughtException", (error) => {
       await seedDatabase();
       logInfo("startup", "Database seeding complete");
       
-      const { runPipelineScheduler } = await import("./pipeline-scheduler");
-      await runPipelineScheduler();
+      // Removed pipeline scheduler from web server to achieve true decoupling.
+      // All background tasks now run strictly in server/worker.ts
       
-      logInfo("startup", "Background Pipeline Scheduler started");
-
     } catch (e: any) {
       logError("startup", "Initial seeding failed", { error: e.message, stack: e.stack?.substring(0, 500) });
-      const { runPipelineScheduler } = await import("./pipeline-scheduler");
-      runPipelineScheduler().catch((err: any) =>
-        logError("startup", "Pipeline scheduler failed", { error: err.message })
-      );
     }
   });
 

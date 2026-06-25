@@ -88,11 +88,21 @@
   --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary, var(--primary))) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
   --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent, var(--accent))) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
 
-  /* Bias colors */
+  /* Bias colors - OLD 3-bucket system (deprecated) */
   --bias-left:   225 73% 48%;
   --bias-center: 215 14% 34%;
   --bias-right:  0 72% 51%;
-  --accent-editorial: 350 73% 44%;
+  
+  /* NEW 4-bucket India-centric taxonomy colors */
+  /* Deliberately desaturated, equal-weight hues that avoid party colors */
+  --bias-pro-establishment:  200 25% 48%;  /* Muted slate-blue (not BJP saffron, not Congress blue) */
+  --bias-pro-opposition:     270 22% 50%;  /* Muted violet (not green/saffron) */
+  --bias-regional-aligned:   25 20% 52%;   /* Muted clay/tan (not saffron) */
+  --bias-neutral:            220 10% 48%;  /* Warm grey */
+  
+  /* Editorial accent - reserved for alerts/corrections only */
+  --accent-editorial: 350 73% 44%;  /* Crimson - use sparingly */
+  --accent-interactive: 200 45% 48%; /* Calmer blue for everyday buttons/links */
 }
 
 .dark {
@@ -236,7 +246,7 @@
   .border.hover-elevate:not(.no-default-hover-elevate)::after,
   .border.active-elevate-2:not(.no-default-active-elevate)::after { inset: -1px; }
 
-  /* Bias colors */
+  /* OLD 3-bucket bias colors (deprecated - kept for backward compatibility) */
   .bias-left   { background-color: hsl(var(--bias-left)); }
   .bias-center { background-color: hsl(var(--bias-center)); }
   .bias-right  { background-color: hsl(var(--bias-right)); }
@@ -246,11 +256,33 @@
   .bias-left-bg   { background-color: hsl(var(--bias-left) / 0.1); }
   .bias-center-bg { background-color: hsl(var(--bias-center) / 0.1); }
   .bias-right-bg  { background-color: hsl(var(--bias-right) / 0.1); }
+  
+  /* NEW 4-bucket bias colors */
+  .bias-pro-establishment   { background-color: hsl(var(--bias-pro-establishment)); }
+  .bias-pro-opposition     { background-color: hsl(var(--bias-pro-opposition)); }
+  .bias-regional-aligned   { background-color: hsl(var(--bias-regional-aligned)); }
+  .bias-neutral            { background-color: hsl(var(--bias-neutral)); }
+  
+  .bias-pro-establishment-text   { color: hsl(var(--bias-pro-establishment)); }
+  .bias-pro-opposition-text     { color: hsl(var(--bias-pro-opposition)); }
+  .bias-regional-aligned-text   { color: hsl(var(--bias-regional-aligned)); }
+  .bias-neutral-text            { color: hsl(var(--bias-neutral)); }
+  
+  .bias-pro-establishment-bg   { background-color: hsl(var(--bias-pro-establishment) / 0.1); }
+  .bias-pro-opposition-bg     { background-color: hsl(var(--bias-pro-opposition) / 0.1); }
+  .bias-regional-aligned-bg   { background-color: hsl(var(--bias-regional-aligned) / 0.1); }
+  .bias-neutral-bg            { background-color: hsl(var(--bias-neutral) / 0.1); }
+  
   .accent-editorial        { color: hsl(var(--accent-editorial)); }
   .accent-editorial-bg     { background-color: hsl(var(--accent-editorial)); }
   .accent-editorial-subtle { background-color: hsl(var(--accent-editorial) / 0.1); }
   .text-accent-editorial   { color: hsl(var(--accent-editorial)); }
   .bg-accent-editorial     { background-color: hsl(var(--accent-editorial)); }
+  
+  .accent-interactive        { color: hsl(var(--accent-interactive)); }
+  .accent-interactive-bg     { background-color: hsl(var(--accent-interactive)); }
+  .text-accent-interactive   { color: hsl(var(--accent-interactive)); }
+  .bg-accent-interactive     { background-color: hsl(var(--accent-interactive)); }
 
   /* Scrollbar hide */
   .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -265,6 +297,13 @@
   }
   .animate-ticker { animation: ticker-scroll 40s linear infinite; }
   .animate-ticker:hover { animation-play-state: paused; }
+  
+  /* Respect prefers-reduced-motion */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-ticker {
+      animation: none;
+    }
+  }
 
   /* Card fade-in */
   @keyframes card-fade-in {
@@ -272,6 +311,20 @@
     to   { opacity: 1; transform: translateY(0); }
   }
   .card-animate { animation: card-fade-in 0.35s ease-out both; }
+
+  /* Fade-in (used in HomePage personalised badge and modals) */
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .animate-fade-in { animation: fade-in 0.3s ease-out both; }
+
+  /* Fade-in-up (premium entrance for modals/cards) */
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in-up { animation: fade-in-up 0.4s ease-out both; }
 
   /* Shimmer skeleton loading */
   @keyframes shimmer {
@@ -287,6 +340,13 @@
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
   }
+  
+  @media (prefers-reduced-motion: reduce) {
+    .animate-shimmer {
+      animation: none;
+      background: hsl(var(--muted));
+    }
+  }
 
   /* Fade up list animation */
   @keyframes fade-up {
@@ -299,6 +359,15 @@
   .stagger-3 { animation-delay: 0.15s; }
   .stagger-4 { animation-delay: 0.2s; }
   .stagger-5 { animation-delay: 0.25s; }
+  
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-up,
+    .card-animate {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+  }
 
   /* Line clamp utilities */
   .line-clamp-1 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
@@ -308,4 +377,52 @@
 
   /* Focus visible ring */
   :focus-visible { outline: 2px solid hsl(var(--accent-editorial)); outline-offset: 2px; }
+
+  /* Scroll-fade edge mask — used in CategoryStrip and any horizontal scroll container */
+  .scroll-fade-right {
+    -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
+    mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  }
+  .scroll-fade-both {
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 5%, black 90%, transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0%, black 5%, black 90%, transparent 100%);
+  }
+
+  /* Glass card — premium dark-mode card surface */
+  .glass-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: calc(var(--radius) + 12px);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+  }
+  .dark .glass-card {
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-color: rgba(255,255,255,0.08);
+  }
+  .glass-card:hover {
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    transform: translateY(-2px);
+  }
+  .dark .glass-card:hover {
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  /* Read-state overlay — articles the user has already opened */
+  .article-read {
+    opacity: 0.72;
+  }
+  .article-read:hover {
+    opacity: 1;
+  }
+
+  /* Optimistic bookmark pulse */
+  @keyframes bookmark-pop {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(1.35); }
+    70%  { transform: scale(0.9); }
+    100% { transform: scale(1); }
+  }
+  .bookmark-pop { animation: bookmark-pop 0.3s cubic-bezier(0.34,1.56,0.64,1) both; }
 }

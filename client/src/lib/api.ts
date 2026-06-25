@@ -95,6 +95,7 @@ export const api = {
       related: ArticleWithDetails[];
       similar: ArticleWithDetails[];
       publisherArticles: { articles: ArticleWithDetails[]; total: number };
+      multiLensScores?: any[];
     }>(`/api/articles/${id}/full`),
     related: (id: string) => request<ArticleWithDetails[]>(`/api/articles/${id}/related`),
     similar: (id: string) => request<ArticleWithDetails[]>(`/api/articles/${id}/similar`),
@@ -107,10 +108,11 @@ export const api = {
       request<any>(`/api/articles/${id}`, { method: "DELETE" }),
     trending: (limit: number = 10) =>
       request<ArticleWithDetails[]>(`/api/articles/trending?limit=${limit}`),
-    homepage: (limit: number = 50, offset: number = 0, search?: string, category?: string) => {
+    homepage: (limit: number = 50, offset: number = 0, search?: string, category?: string, market?: string) => {
       const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (search) q.set("search", search);
       if (category) q.set("category", category);
+      if (market) q.set("market", market);
       return request<ArticleWithDetails[]>(`/api/homepage?${q}`);
     },
     forYou: (limit: number = 20, offset: number = 0) =>

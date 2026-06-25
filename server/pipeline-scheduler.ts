@@ -8,6 +8,8 @@ import {
   updatePublisherUniqueness,
   updateHomepageCache,
   runEnrichmentScheduler,
+  runVelocityScheduler,
+  runAnalyticsScheduler
 } from "./processing";
 import { db } from "./db";
 import { clusters, sessions, articles, homepageCache } from "../shared/schema";
@@ -44,6 +46,8 @@ export async function runPipelineScheduler() {
   startAutoFetch();
   startReclusteringJob();
   runEnrichmentScheduler();
+  runVelocityScheduler();
+  runAnalyticsScheduler();
 
   // 2. Cluster Analytics & Diversity Audit (Every 10 minutes)
   trackInterval(async () => {

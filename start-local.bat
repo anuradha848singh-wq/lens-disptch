@@ -88,14 +88,19 @@ if errorlevel 1 (
     echo  [WARNING] JINA_API_KEY not found in .env ^(Embeddings may fail^)
 )
 
+REM Start Python Local Embedding Service
+echo.
+echo  [6/7] Starting Python Local Embedding Service (Port 5005) in a new window...
+start cmd /k "title Python Embeddings && if not exist venv (python -m venv venv && call venv\Scripts\activate && pip install -r requirements.txt) else (call venv\Scripts\activate) && python server/embedding_service.py"
+
 REM Start Node Worker
 echo.
-echo  [6/6] Starting Node Background Worker (BullMQ) in a new window...
+echo  [7/7] Starting Node Background Worker (BullMQ) in a new window...
 start cmd /k "title Node Worker && npm run worker:dev"
 
 REM Start Node server
 echo.
-echo  Starting server at http://localhost:5000
+echo  Starting web server at http://localhost:5000
 echo  Press Ctrl+C to stop.
 echo.
 call npm run dev

@@ -11,9 +11,11 @@ export const mediaTypeEnum = pgEnum("media_type", ["image", "video", "embed"]);
 export const factualityEnum = pgEnum("factuality", ["very_high", "high", "mixed", "low", "very_low"]);
 export const ownerTypeEnum = pgEnum("owner_type", ["corporation", "individual", "nonprofit", "government", "unknown"]);
 
+export const EMBEDDING_DIM = 384;
+
 export const vector = customType<{ data: number[] }>({
   dataType() {
-    return "vector(384)";
+    return `vector(${EMBEDDING_DIM})`;
   },
   toDriver(value: number[]) {
     return `[${value.join(",")}]`;
@@ -31,6 +33,8 @@ export const users = pgTable("users", {
   role: userRoleEnum("role").notNull().default("editor"),
   status: userStatusEnum("status").notNull().default("active"),
   preferences: jsonb("preferences").$type<Record<string, any>>().default({}),
+  interestVector: vector("interest_vector"),
+  biasProfile: jsonb("bias_profile").$type<Record<string, number>>().default({}),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -118,7 +122,12 @@ export const clusters = pgTable("clusters", {
   blindspotSide: text("blindspot_side", { enum: ["pro_establishment", "pro_opposition", "regional_aligned", "neutral"] }),
   hasCorrection: boolean("has_correction").notNull().default(false),
   correctionNote: text("correction_note"),
-  aiSummary: jsonb("ai_summary").$type<string[]>().default([]),
+  aiSummary: jsonb("ai_summary").$type<{
+    left?: string;
+    center?: string;
+    right?: string;
+    synthesis?: string;
+  } | string[]>().default([]),
   aiFramingDiff: text("ai_framing_diff"),
   aiEnrichedAt: timestamp("ai_enriched_at"),
   // --- Premium Features (FLAN-T5 Powered) ---
@@ -152,6 +161,8 @@ export const clusters = pgTable("clusters", {
   shannonDiversity: integer("shannon_diversity").notNull().default(0), // 0-100
   originPublisherId: varchar("origin_publisher_id").references(() => publishers.id),
   originPublishedAt: timestamp("origin_published_at"),
+  primaryMarket: varchar("primary_market").notNull().default("US"),
+  multiMarket: jsonb("multi_market").$type<string[]>().default([]),
 }, (table) => ({
   importanceIdx: index("clusters_importance_idx").on(table.importanceScore),
   trendingIdx: index("clusters_trending_idx").on(table.trendingScore),
@@ -161,6 +172,28 @@ export const clusters = pgTable("clusters", {
   divergenceIdx: index("clusters_divergence_idx").on(table.divergenceScore),
   categoryIdx: index("clusters_category_idx").on(table.categorySlug),
   importanceFirstSeenIdx: index("clusters_importance_first_seen_idx").on(table.importanceScore, table.firstSeenAt),
+}));
+
+export const clusterCentroids = pgTable("cluster_centroids", {
+  clusterId: varchar("cluster_id").primaryKey().references(() => clusters.id, { onDelete: "cascade" }),
+  centroid: vector("centroid").notNull(),
+  articleCount: integer("article_count").notNull().default(1),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  centroidIdx: index("idx_cluster_centroids_hnsw")
+    .using("hnsw", table.centroid.op("vector_cosine_ops"))
+    .with({ m: 16, ef_construction: 64 }),
+}));
+
+export const clusterScores = pgTable("cluster_scores", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clusterId: varchar("cluster_id").notNull().references(() => clusters.id, { onDelete: "cascade" }),
+  countryCode: varchar("country_code").notNull(),
+  biasModel: varchar("bias_model").notNull(),
+  scoreData: jsonb("score_data").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  pk: uniqueIndex("cluster_scores_pk").on(table.clusterId, table.countryCode),
 }));
 
 export const categories = pgTable("categories", {
@@ -311,6 +344,18 @@ export const readingHistory = pgTable("reading_history", {
   userIdx: index("reading_history_user_idx").on(table.userId),
 }));
 
+export const userInteractions = pgTable("user_interactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  clusterId: varchar("cluster_id").notNull().references(() => clusters.id, { onDelete: "cascade" }),
+  action: text("action", { enum: ["click", "read", "upvote", "share"] }).notNull(),
+  durationMs: integer("duration_ms").default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  userIdx: index("user_interactions_user_idx").on(table.userId),
+  clusterIdx: index("user_interactions_cluster_idx").on(table.clusterId),
+}));
+
 export const userPreferences = pgTable("user_preferences", {
   userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   followedTopics: jsonb("followed_topics").$type<string[]>().default([]),
@@ -428,6 +473,15 @@ export const insertClusterSchema = createInsertSchema(clusters).omit({
   lastUpdatedAt: true,
 });
 
+export const insertClusterScoreSchema = createInsertSchema(clusterScores).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertClusterCentroidSchema = createInsertSchema(clusterCentroids).omit({
+  updatedAt: true,
+});
+
 export const insertCategorySchema = createInsertSchema(categories).omit({
   id: true,
   createdAt: true,
@@ -518,6 +572,10 @@ export type Publisher = typeof publishers.$inferSelect;
 export type InsertPublisher = z.infer<typeof insertPublisherSchema>;
 export type Cluster = typeof clusters.$inferSelect;
 export type InsertCluster = z.infer<typeof insertClusterSchema>;
+export type ClusterScore = typeof clusterScores.$inferSelect;
+export type InsertClusterScore = z.infer<typeof insertClusterScoreSchema>;
+export type ClusterCentroid = typeof clusterCentroids.$inferSelect;
+export type InsertClusterCentroid = z.infer<typeof insertClusterCentroidSchema>;
 export type Category = typeof categories.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Tag = typeof tags.$inferSelect;
@@ -578,6 +636,9 @@ export type ArticleWithDetails = Article & {
   neutralCount?: number;
   shannonDiversity?: number;
   isDiversityPick?: boolean;
+  primaryMarket?: string;
+  multiMarket?: string[];
+  scores?: any[]; // Array of ClusterScore
 };
 
 export type MyBiasStats = {

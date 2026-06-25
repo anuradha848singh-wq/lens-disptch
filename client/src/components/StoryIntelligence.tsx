@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 export function StoryOrigin({ publisher, publishedAt }: { publisher?: any; publishedAt?: string }) {
   if (!publisher) return null;
   return (
-    <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 mb-8 flex items-center gap-5">
+    <div className="flex items-center gap-4">
       <div className="flex flex-col items-center gap-1.5 shrink-0">
         <div className="w-12 h-12 rounded-xl bg-white shadow-sm border border-blue-100 flex items-center justify-center overflow-hidden">
           <PublisherLogo name={publisher.name} domain={publisher.website} size="md" />
@@ -76,8 +76,8 @@ export function DeepIntelligenceDashboard({ data, isLoading }: { data?: any; isL
   const { sdi, geography } = data.intelligence;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-      <div className="bg-card border border-border rounded-2xl p-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <div className="border border-border/50 p-4">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-sm font-black uppercase tracking-widest text-muted-foreground">Perspectives Diversity</h3>
           <span className={`text-lg font-black ${sdi > 75 ? 'text-green-600' : sdi > 50 ? 'text-blue-600' : 'text-amber-600'}`}>
@@ -99,8 +99,8 @@ export function DeepIntelligenceDashboard({ data, isLoading }: { data?: any; isL
         </div>
       </div>
 
-      <div className="bg-card border border-border rounded-2xl p-6">
-        <h3 className="text-sm font-black uppercase tracking-widest text-muted-foreground mb-6">Global Reach</h3>
+      <div className="border border-border/50 p-4">
+        <h3 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-4">Global Reach</h3>
         <CoverageByCountry countryData={geography} />
       </div>
     </div>
@@ -118,8 +118,8 @@ export function StoryTimeline({ clusterId }: { clusterId: string }) {
   if (!timeline || timeline.length === 0) return null;
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-6 mb-6">
-      <h3 className="text-sm font-black uppercase tracking-widest text-muted-foreground mb-5 pb-2 border-b border-border flex items-center gap-2">
+    <div className="border-t border-border/50 py-4 mt-4">
+      <h3 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-4 pb-2 border-b border-border flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-blue-500" />
         Story Timeline
       </h3>

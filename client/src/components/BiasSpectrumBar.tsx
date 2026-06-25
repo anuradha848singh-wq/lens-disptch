@@ -24,9 +24,9 @@ export function BiasSpectrumBar({
   const total = totalStats !== undefined ? totalStats : proEstablishmentCount + neutralCount + proOppositionCount;
 
   // Calculate percentages (handle division by zero)
-  const leftPct = total > 0 ? (proEstablishmentCount / total) * 100 : 0;
+  const leftPct = total > 0 ? (proOppositionCount / total) * 100 : 0;
   const centerPct = total > 0 ? (neutralCount / total) * 100 : 0;
-  const rightPct = total > 0 ? (proOppositionCount / total) * 100 : 0;
+  const rightPct = total > 0 ? (proEstablishmentCount / total) * 100 : 0;
 
   if (total === 0) {
     return (
@@ -74,7 +74,7 @@ export function BiasSpectrumBar({
               <div className="w-2 h-2 rounded-full bg-[#2563EB]" />
               <span className="font-medium">Left</span>
             </div>
-            <span className="text-muted-foreground">{leftPct.toFixed(0)}% ({proEstablishmentCount})</span>
+            <span className="text-muted-foreground">{leftPct.toFixed(0)}% ({proOppositionCount})</span>
           </div>
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
@@ -88,7 +88,7 @@ export function BiasSpectrumBar({
               <div className="w-2 h-2 rounded-full bg-[#DC2626]" />
               <span className="font-medium">Right</span>
             </div>
-            <span className="text-muted-foreground">{rightPct.toFixed(0)}% ({proOppositionCount})</span>
+            <span className="text-muted-foreground">{rightPct.toFixed(0)}% ({proEstablishmentCount})</span>
           </div>
         </TooltipContent>
       </Tooltip>

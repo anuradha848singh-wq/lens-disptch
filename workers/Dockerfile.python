@@ -1,0 +1,33 @@
+# Dockerfile for Python AI Enrichment Worker (flan_worker.py)
+# Provides: framing diffs, foreign gaze, ticker extraction, entity quotes, executive briefings
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for PyTorch (CPU-only build to minimize image size)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python requirements first (layer cache optimization)
+COPY workers/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the worker script
+COPY workers/flan_worker.py ./flan_worker.py
+
+# Create a non-root user for security
+RUN useradd -m -u 1001 worker
+USER worker
+
+# Pre-download the FLAN-T5 models on image build so the container
+# starts immediately without downloading 300MB-800MB at runtime.
+# Comment out if you prefer to download on first use.
+RUN python -c "from transformers import T5ForConditionalGeneration, T5Tokenizer; \
+    T5Tokenizer.from_pretrained('google/flan-t5-small'); \
+    T5ForConditionalGeneration.from_pretrained('google/flan-t5-small')" || true
+
+CMD ["python", "flan_worker.py"]

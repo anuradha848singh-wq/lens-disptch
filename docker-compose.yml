@@ -78,6 +78,34 @@ services:
       redis:
         condition: service_healthy
 
+  # ── Python AI Enrichment Worker ────────────────────────────────────────────
+  # CRITICAL: This service was previously MISSING from docker-compose.yml.
+  # Without it, ALL premium AI features fail silently in production:
+  #   - Framing differences (left vs right perspective)
+  #   - Foreign Gaze analysis (domestic vs international coverage)
+  #   - Market ticker extraction
+  #   - Entity & quote extraction
+  #   - Executive briefing (Map-Reduce summaries for major stories)
+  flan_worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile.python
+    command: python workers/flan_worker.py
+    environment:
+      - DATABASE_URL=postgresql://admin:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/thelensdispatch
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 2G    # flan-t5-large needs ~800MB; leave headroom for base + small
+        reservations:
+          memory: 512M
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:

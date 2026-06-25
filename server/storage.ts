@@ -14,7 +14,7 @@ import {
   users, userProfiles, publishers, clusters, categories, tags, 
   articles, articleCategories, articleTags, articleViews, 
   bookmarks, sessions, readingHistory, 
-  userPreferences, shareEvents, systemSettings
+  userPreferences, shareEvents, systemSettings, clusterCentroids
 } from "../shared/schema";
 import { db, isDbConnected } from "./db";
 import { cache, CACHE_KEYS } from "./cache";
@@ -76,7 +76,7 @@ export interface IStorage {
   deleteArticle(id: string): Promise<void>;
   publishArticle(id: string): Promise<Article>;
   
-  trackArticleView(view: InsertArticleView): Promise<ArticleView>;
+  trackArticleView(view: InsertArticleView): Promise<ArticleView | null>;
   getArticleViews(articleId: string): Promise<number>;
   
   isBookmarked(userId: string, articleId: string): Promise<boolean>;
@@ -108,6 +108,8 @@ export interface IStorage {
   updateSystemSettings(data: Partial<SystemSettings>): Promise<SystemSettings>;
   resetFetchQueue(): Promise<void>;
   findSimilarArticles(embedding: number[], options?: { limit?: number; threshold?: number }): Promise<Article[]>;
+  upsertClusterCentroid(clusterId: string, embedding: number[], articleCount: number): Promise<void>;
+  findNearestClusters(embedding: number[], options?: { limit?: number, minScore?: number, maxAgeHours?: number }): Promise<{ clusterId: string, distance: number }[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -340,7 +342,7 @@ export class MemStorage implements IStorage {
 
   async createCluster(insertCluster: InsertCluster): Promise<Cluster> {
     const id = insertCluster.id || randomUUID();
-    const cluster: Cluster = {
+    const cluster = {
       ...insertCluster,
       id,
       headline: insertCluster.headline,
@@ -376,7 +378,9 @@ export class MemStorage implements IStorage {
       shannonDiversity: insertCluster.shannonDiversity || 0,
       originPublisherId: insertCluster.originPublisherId || null,
       originPublishedAt: insertCluster.originPublishedAt ? new Date(insertCluster.originPublishedAt) : null,
-    };
+      primaryMarket: insertCluster.primaryMarket || "US",
+      multiMarket: insertCluster.multiMarket || null,
+    } as Cluster;
     this.clusters.set(id, cluster);
     return cluster;
   }
@@ -1254,6 +1258,15 @@ export class MemStorage implements IStorage {
       .map(r => r.article);
   }
 
+  async upsertClusterCentroid(clusterId: string, embedding: number[], articleCount: number): Promise<void> {
+    // MemStorage: No-op for this implementation
+  }
+
+  async findNearestClusters(embedding: number[], options: { limit?: number, minScore?: number, maxAgeHours?: number } = {}): Promise<{ clusterId: string, distance: number }[]> {
+    // MemStorage: Returns empty for nearest clusters
+    return [];
+  }
+
   async getHomepageSlots(): Promise<Record<string, any[]>> {
     // Simplified implementation for MemStorage — returns flattened clusters
     const data = await this.getHomepageClusters(50);
@@ -1264,6 +1277,20 @@ export class MemStorage implements IStorage {
       category_highlights: [],
     };
   }
+}
+
+export function mapRowToCamelCase<T>(row: any): T {
+  if (!row) return row;
+  const camelRow: any = {};
+  for (const key of Object.keys(row)) {
+    const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+    let val = row[key];
+    if (key.endsWith('_at') && val) {
+      val = val instanceof Date ? val : new Date(val);
+    }
+    camelRow[camelKey] = val;
+  }
+  return camelRow;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1584,7 +1611,7 @@ export class DatabaseStorage implements IStorage {
       `;
       
       const rawResults = await db.execute(distinctQuery);
-      const results = rawResults.rows as Article[];
+      const results = rawResults.rows.map((row: any) => mapRowToCamelCase<Article>(row));
       
       const countQuery = sql`
         SELECT COUNT(DISTINCT COALESCE(cluster_id, id)) as count
@@ -1647,7 +1674,7 @@ export class DatabaseStorage implements IStorage {
         LIMIT ${params.limit || 20}
       `);
       
-      const results = rawResults.rows as Article[];
+      const results = rawResults.rows.map((row: any) => mapRowToCamelCase<Article>(row));
       const enriched = await this.enrichArticlesBatch(results);
       return { articles: enriched, total: results.length };
     }
@@ -1731,12 +1758,21 @@ export class DatabaseStorage implements IStorage {
     return published;
   }
 
-  async trackArticleView(insertView: InsertArticleView): Promise<ArticleView> {
-    const [view] = await db.insert(articleViews).values({
-      ...insertView,
-      id: randomUUID()
-    }).returning();
-    return view;
+  async trackArticleView(insertView: InsertArticleView): Promise<ArticleView | null> {
+    try {
+      const [view] = await db.insert(articleViews).values({
+        ...insertView,
+        id: randomUUID()
+      }).returning();
+      return view;
+    } catch (error: any) {
+      if (error.code === '23503') {
+        // Foreign key violation: Article doesn't exist. Fail gracefully instead of HTTP 500.
+        console.warn(`[Tracking] Discarded view for unknown article ID: ${insertView.articleId}`);
+        return null;
+      }
+      throw error;
+    }
   }
 
   async getArticleViews(articleId: string): Promise<number> {
@@ -1807,32 +1843,31 @@ export class DatabaseStorage implements IStorage {
       LIMIT ${limit}
     `);
 
-    const results = trending.rows.map((row: any) => {
-      const art: any = { ...row };
-      art.sourceId = row.source_id;
-      art.clusterId = row.cluster_id;
-      art.publishedAt = row.published_at ? new Date(row.published_at) : new Date();
-      art.heroImageUrl = row.hero_image_url;
-      art.sourceUrl = row.source_url;
-      art.bodyClean = row.body_clean;
-      art.bodyHtml = row.body_html;
-      art.qualityScore = row.quality_score;
-      art.importanceScore = row.importance_score;
-      art.biasScore = row.bias_score;
-      return art;
-    });
+    const results = trending.rows.map((row: any) => mapRowToCamelCase<Article>(row));
 
     return this.enrichArticlesBatch(results);
   }
 
-  async getHomepageClusters(limit: number = 50): Promise<any[]> {
-    return await cache.fetch("homepage_clusters_final", async () => {
-      const topClusters = await db.select()
+  async getHomepageClusters(limit: number = 50, offset: number = 0, search?: string, category?: string, market?: string): Promise<any[]> {
+    const cacheKey = `homepage_clusters_${limit}_${offset}_${search || 'all'}_${category || 'all'}_${market || 'all'}`;
+    return await cache.fetch(cacheKey, async () => {
+      let conditions = [sql`${clusters.sourceCount} >= 0`];
+      if (market && market !== "GLOBAL") {
+        conditions.push(sql`(${clusters.primaryMarket} = ${market} OR ${clusters.multiMarket} ? ${market})`);
+      }
+      if (search) {
+        conditions.push(sql`${clusters.headline} ILIKE ${`%${search}%`}`);
+      }
+      
+      const query = db.select()
         .from(clusters)
-        .where(sql`${clusters.sourceCount} >= 1`)
-        .orderBy(desc(clusters.importanceScore), desc(clusters.sourceCount), desc(clusters.lastUpdatedAt))
+        .where(and(...conditions))
+        .orderBy(desc(clusters.lastUpdatedAt))
         .limit(200);
+      console.log("[getHomepageClusters] Query:", query.toSQL());
+      const topClusters = await query;
 
+      console.log(`[getHomepageClusters] Found ${topClusters.length} clusters matching market conditions.`);
       if (topClusters.length === 0) return [];
 
       const clusterIds = topClusters.map((c: typeof topClusters[0]) => c.id);
@@ -1849,24 +1884,28 @@ export class DatabaseStorage implements IStorage {
         WHERE rn = 1
       `;
       const rawResults = await db.execute(latestArticlesQuery);
-      const repArticles = rawResults.rows.map((row: any) => {
-        // Drizzle expects camelCase properties, but raw SQL returns snake_case
-        const art: any = { ...row };
-        if (row.cluster_id) art.clusterId = row.cluster_id;
-        if (row.source_id) art.sourceId = row.source_id;
-        if (row.published_at) art.publishedAt = row.published_at instanceof Date ? row.published_at : new Date(row.published_at);
-        if (row.hero_image_url) art.heroImageUrl = row.hero_image_url;
-        return art;
-      });
+      console.log(`[getHomepageClusters] DB returned ${rawResults.rows.length} articles for those clusters.`);
+      const repArticles = rawResults.rows.map((row: any) => mapRowToCamelCase<Article>(row));
 
       const enriched = await this.enrichArticlesBatch(repArticles, { skipSourceCount: true });
       const enrichedMap = new Map(enriched.map(a => [a.clusterId, a]));
       
-      const results = [];
+      const scoredClusters = [];
       for (const c of topClusters) {
         const art = enrichedMap.get(c.id);
         if (art) {
-          results.push({
+          // w1=recency, w2=sourceCount, w3=perspectiveSpread, w4=breakingScore
+          const hoursOld = (Date.now() - new Date(c.lastUpdatedAt || Date.now()).getTime()) / (1000 * 60 * 60);
+          const recencyScore = Math.max(0, 24 - hoursOld) / 24; // 0 to 1
+          
+          const srcCount = c.sourceCount || 1;
+          const perspectiveSpread = ((c.proEstablishmentCount || 0) > 0 ? 1 : 0) + ((c.proOppositionCount || 0) > 0 ? 1 : 0) + ((c.neutralCount || 0) > 0 ? 1 : 0);
+          
+          const breakingScore = c.importanceScore || 0; // Out of 100
+
+          const score = (recencyScore * 10) + (Math.min(srcCount, 20) * 0.5) + (perspectiveSpread * 25) + (breakingScore * 0.5);
+
+          scoredClusters.push({
             ...art,
             isCluster: true,
             clusterId: c.id,
@@ -1877,11 +1916,38 @@ export class DatabaseStorage implements IStorage {
             neutralCount: c.neutralCount || 0,
             proOppositionCount: c.proOppositionCount || 0,
             totalSources: c.sourceCount,
+            score,
+            categoryId: (art.categories && art.categories.length > 0) ? art.categories[0].id : null,
           });
         }
       }
       
-      return results;
+      // Greedy Selection with Category Cap (max 10 per category) to ensure variety but keep volume high
+      scoredClusters.sort((a, b) => b.score - a.score);
+      
+      const finalSelection = [];
+      const categoryCounts = new Map<string, number>();
+      
+      for (const sc of scoredClusters) {
+        if (finalSelection.length >= limit) break;
+        
+        // If searching for a specific category, only include that category
+        if (category && category !== "all") {
+          const artCatSlug = sc.categories?.[0]?.slug || sc.categories?.[0]?.name?.toLowerCase() || "";
+          if (artCatSlug !== category.toLowerCase()) continue;
+        }
+
+        const catId = sc.categoryId || "unknown";
+        const count = categoryCounts.get(catId) || 0;
+        
+        if (count < 10) {
+          finalSelection.push(sc);
+          categoryCounts.set(catId, count + 1);
+        }
+      }
+      
+      // If we paginated, return the correct slice
+      return finalSelection.slice(offset, offset + limit);
     });
   }
 
@@ -1902,23 +1968,8 @@ export class DatabaseStorage implements IStorage {
       ORDER BY a.published_at DESC LIMIT 10
     `);
 
-    const mapRow = (row: any) => {
-      const art: any = { ...row };
-      art.sourceId = row.source_id;
-      art.clusterId = row.cluster_id;
-      art.publishedAt = row.published_at ? new Date(row.published_at) : new Date();
-      art.heroImageUrl = row.hero_image_url;
-      art.sourceUrl = row.source_url;
-      art.bodyClean = row.body_clean;
-      art.bodyHtml = row.body_html;
-      art.qualityScore = row.quality_score;
-      art.importanceScore = row.importance_score;
-      art.biasScore = row.bias_score;
-      return art;
-    };
-
-    const leftBlindspot = await this.enrichArticlesBatch(leftQuery.rows.map(mapRow));
-    const rightBlindspot = await this.enrichArticlesBatch(rightQuery.rows.map(mapRow));
+    const leftBlindspot = await this.enrichArticlesBatch(leftQuery.rows.map((row: any) => mapRowToCamelCase<Article>(row)));
+    const rightBlindspot = await this.enrichArticlesBatch(rightQuery.rows.map((row: any) => mapRowToCamelCase<Article>(row)));
     return { leftBlindspot, rightBlindspot };
   }
 
@@ -2060,59 +2111,99 @@ export class DatabaseStorage implements IStorage {
   async getForYouArticles(userId: string, limit: number): Promise<ArticleWithDetails[]> {
     const prefs = await this.getUserPreferences(userId);
     const biasStats = await this.getMyNewsBias(userId);
-    let query = db.select().from(articles).where(eq(articles.status, 'published'));
+    const history = await this.getReadingHistory(userId, 50);
 
-    if (prefs) {
-      if (prefs.followedCategories && prefs.followedCategories.length > 0) {
-        const catIds = prefs.followedCategories;
-        query = db.select().from(articles)
-          .innerJoin(articleCategories, eq(articles.id, articleCategories.articleId))
-          .where(and(
-            eq(articles.status, 'published'),
-            inArray(articleCategories.categoryId, catIds)
-          )) as any;
+    // Build implicit profiles from history
+    const implicitCategories = new Map<string, number>();
+    const implicitPublishers = new Map<string, number>();
+    
+    for (const h of history) {
+      if (h.article.sourceId) {
+        implicitPublishers.set(h.article.sourceId, (implicitPublishers.get(h.article.sourceId) || 0) + 1);
+      }
+      if (h.article.categories && h.article.categories.length > 0) {
+        const cat = h.article.categories[0].id;
+        implicitCategories.set(cat, (implicitCategories.get(cat) || 0) + 1);
       }
     }
 
-    const articlesList = await query
+    // 1. Candidate Generation: Fetch Top 100 recent articles
+    const candidates = await db.select()
+      .from(articles)
+      .where(eq(articles.status, 'published'))
       .orderBy(desc(articles.publishedAt))
-      .limit(limit);
-      
-    const rawArticles = 'article' in articlesList[0] ? (articlesList as any[]).map(r => r.article) : articlesList;
-    const enriched = await this.enrichArticlesBatch(rawArticles as Article[]);
+      .limit(100);
 
-    // FEED DIVERSITY INJECTION
+    if (candidates.length === 0) return [];
+
+    // Pre-fetch categories for candidates to allow TS scoring
+    const candidateIds = candidates.map((a: any) => a.id);
+    const catMappings = await db.select()
+      .from(articleCategories)
+      .where(inArray(articleCategories.articleId, candidateIds));
+      
+    const catsByArticle = new Map<string, string[]>();
+    for (const m of catMappings) {
+      const arr = catsByArticle.get(m.articleId) || [];
+      arr.push(m.categoryId);
+      catsByArticle.set(m.articleId, arr);
+    }
+
+    // Identify user's blindspot bias bucket
+    let blindspotBias: "pro_establishment" | "pro_opposition" | "neutral" | null = null;
     if (biasStats && biasStats.totalRead > 5) {
-      let blindspotBias: "pro_establishment" | "pro_opposition" | "regional_aligned" | "neutral" | null = null;
       if (biasStats.proEstablishmentPercent > 60) blindspotBias = "pro_opposition";
       else if (biasStats.proOppositionPercent > 60) blindspotBias = "pro_establishment";
+    }
 
-      if (blindspotBias) {
-        // Fetch 2 recent, high-importance articles from the blindspot bucket
-        const diversityRows = await db.select({ article: articles })
-          .from(articles)
-          .innerJoin(publishers, eq(articles.sourceId, publishers.id))
-          .where(and(
-            eq(articles.status, 'published'),
-            eq(publishers.biasRating, blindspotBias as any)
-          ))
-          .orderBy(desc(articles.importanceScore), desc(articles.publishedAt))
-          .limit(2);
-          
-        for (const row of diversityRows) {
-          if (!enriched.some(a => a.id === row.article.id)) {
-            const [enrichedDiv] = await this.enrichArticlesBatch([row.article]);
-            (enrichedDiv as any).isDiversityPick = true;
-            // Insert randomly in the top 5
-            const insertIndex = Math.floor(Math.random() * Math.min(5, enriched.length));
-            enriched.splice(insertIndex, 0, enrichedDiv);
-            if (enriched.length > limit) enriched.pop();
-          }
+    const publishersCache = new Map<string, any>();
+    const allPubs = await db.select().from(publishers);
+    allPubs.forEach((p: any) => publishersCache.set(p.id, p));
+
+    // 2. Scoring Engine
+    const scoredCandidates = candidates.map((article: any) => {
+      let score = (article.importanceScore || 0) * 0.1;
+
+      const articleCats = catsByArticle.get(article.id) || [];
+      const pub = publishersCache.get(article.sourceId);
+
+      // Explicit Preferences (+15)
+      if (prefs && prefs.followedCategories && prefs.followedCategories.length > 0) {
+        if (articleCats.some(c => prefs.followedCategories!.includes(c))) {
+          score += 15;
         }
       }
-    }
-    
-    return enriched;
+
+      // Implicit History (+ up to 10)
+      let implicitScore = 0;
+      if (implicitPublishers.has(article.sourceId)) {
+        implicitScore += Math.min(5, implicitPublishers.get(article.sourceId)!);
+      }
+      for (const c of articleCats) {
+        if (implicitCategories.has(c)) {
+          implicitScore += Math.min(5, implicitCategories.get(c)!);
+        }
+      }
+      score += implicitScore;
+
+      // Blindspot Discovery (+10)
+      if (blindspotBias && pub && pub.biasRating === blindspotBias) {
+        score += 10;
+        (article as any).isDiversityPick = true;
+      }
+
+      // Recency Decay
+      const hoursOld = (Date.now() - (article.publishedAt || article.createdAt).getTime()) / (1000 * 60 * 60);
+      score += Math.max(0, 5 - (hoursOld / 12)); // up to +5 for very recent
+
+      return { article, score };
+    });
+
+    // 3. Ranking & Selection
+    scoredCandidates.sort((a: any, b: any) => b.score - a.score);
+    const topCandidates = scoredCandidates.slice(0, limit).map((s: any) => s.article);
+
+    return await this.enrichArticlesBatch(topCandidates as Article[]);
   }
 
   async getSystemSettings(): Promise<SystemSettings> {
@@ -2233,7 +2324,7 @@ export class DatabaseStorage implements IStorage {
         ORDER BY ae.embedding <=> ${`[${embedding.join(',')}]`}::vector ASC
         LIMIT ${limit}
       `);
-      return results.rows as Article[];
+      return results.rows.map((row: any) => mapRowToCamelCase<Article>(row));
     } catch (_err) {
       // Fallback: return empty if pgvector extension not available
       console.warn("[Storage] findSimilarArticles: pgvector query failed, returning empty.");
@@ -2355,6 +2446,72 @@ export class DatabaseStorage implements IStorage {
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
   }
+
+  async upsertClusterCentroid(clusterId: string, embedding: number[], articleCount: number): Promise<void> {
+    try {
+      // pgvector doesn't support scalar multiplication directly in SQL (vector * integer)
+      // So we fetch the existing centroid, do the math in JS, and update.
+      const existing = await db.select().from(clusterCentroids).where(eq(clusterCentroids.clusterId, clusterId)).limit(1);
+      
+      if (existing.length === 0) {
+        await db.insert(clusterCentroids).values({
+          clusterId,
+          centroid: embedding,
+          articleCount
+        });
+      } else {
+        const row = existing[0];
+        let oldCentroid = row.centroid;
+        if (typeof oldCentroid === 'string') {
+          try { oldCentroid = JSON.parse(oldCentroid); } catch(e) {}
+        }
+        
+        if (Array.isArray(oldCentroid) && oldCentroid.length === embedding.length) {
+          const newCount = (row.articleCount || 1) + 1;
+          const newCentroid = new Array(embedding.length);
+          for (let i = 0; i < embedding.length; i++) {
+            newCentroid[i] = ((oldCentroid[i] * (row.articleCount || 1)) + embedding[i]) / newCount;
+          }
+          
+          await db.update(clusterCentroids).set({
+            centroid: newCentroid,
+            articleCount: newCount,
+            updatedAt: new Date()
+          }).where(eq(clusterCentroids.clusterId, clusterId));
+        }
+      }
+    } catch (err) {
+      console.warn("[Storage] upsertClusterCentroid failed:", err);
+    }
+  }
+
+  async findNearestClusters(embedding: number[], options: { limit?: number, minScore?: number, maxAgeHours?: number } = {}): Promise<{ clusterId: string, distance: number }[]> {
+    const limit = options.limit || 50;
+    const minScore = options.minScore || 0;
+    const cutoff = new Date(Date.now() - (options.maxAgeHours || 120) * 60 * 60 * 1000);
+    const vecStr = `[${embedding.join(",")}]`;
+    const maxDistance = 1 - minScore;
+
+    try {
+      const results = await db.execute(sql`
+        SELECT cc.cluster_id, (cc.centroid <=> ${vecStr}::vector) as distance
+        FROM cluster_centroids cc
+        JOIN clusters cl ON cl.id = cc.cluster_id
+        WHERE cl.last_updated_at > ${cutoff}
+        AND (cc.centroid <=> ${vecStr}::vector) < ${maxDistance}
+        ORDER BY cc.centroid <=> ${vecStr}::vector ASC
+        LIMIT ${limit}
+      `);
+      
+      return results.rows.map((r: any) => ({
+        clusterId: r.cluster_id,
+        distance: r.distance
+      }));
+    } catch (err) {
+      console.warn("[Storage] findNearestClusters failed (pgvector might be missing):", err);
+      return [];
+    }
+  }
 }
 
 let _realStorage: IStorage | null = null;
@@ -2366,10 +2523,10 @@ export const storage = new Proxy({} as any, {
     let targetStorage: IStorage;
     if (process.env.DATABASE_URL) {
       if (!_realStorage) _realStorage = new DatabaseStorage();
-      targetStorage = _realStorage;
+      targetStorage = _realStorage!;
     } else {
       if (!_memStorage) _memStorage = new MemStorage();
-      targetStorage = _memStorage;
+      targetStorage = _memStorage!;
     }
 
     const value = (targetStorage as any)[prop];

@@ -18,12 +18,13 @@ import { recordFetchStart, recordFetchEnd, recordFetchSource } from "./metrics";
 import { preIngestQualityGate, formatRejection } from "./quality-gate";
 import { createHash } from "crypto";
 import { embeddingService } from "./lib/embeddings-client";
-import { eq, sql, and, desc, gte, lt } from "drizzle-orm";
+import { eq, sql, and, desc, gte, lt, inArray } from "drizzle-orm";
+import { timed } from "./benchmark-collector";
 
 // Deduplication Caches (Scoped by Domain to ensure 20+ sources can cluster)
 const PROCESSED_URL_HASHES = new Set<string>();
 const PROCESSED_TITLE_SHINGLES = new Map<string, Set<string>>(); // Key: "domain:title"
-const MAX_CACHE_SIZE = 50000;
+const MAX_CACHE_SIZE = 200000;
 
 function normalizeUrl(url: string) {
   try {
@@ -72,7 +73,7 @@ async function fetchWithRetry(
     try {
       const response = await fetch(url, {
         headers,
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(5000),
       });
       // Allow 304 Not Modified
       if (!response.ok && response.status !== 304) {
@@ -109,11 +110,12 @@ function categoriseError(err: any): string {
 }
 
 // ─── Circuit Breaker ──────────────────────────────────────────────────────────
-const CIRCUIT_BREAKER_THRESHOLD = 10; // consecutive failures before auto-disable
-const sourceFailCounts = new Map<string, number>();
+const CIRCUIT_BREAKER_THRESHOLD = 5; // 5 consecutive failures before auto-disable
+const CIRCUIT_BREAKER_COOLDOWN = 5 * 60 * 1000; // 5 min cooldown
+const sourceFailState = new Map<string, { count: number, lastFailure: number }>();
 
 async function recordSourceSuccess(sourceName: string): Promise<void> {
-  sourceFailCounts.set(sourceName, 0);
+  sourceFailState.delete(sourceName);
   // Reset failCount in DB if it was elevated
   try {
     const pub = await storage.getPublisherBySlug(sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
@@ -124,46 +126,19 @@ async function recordSourceSuccess(sourceName: string): Promise<void> {
 }
 
 async function recordSourceFailure(sourceName: string, sourceQuality: number = 60): Promise<boolean> {
-  const count = (sourceFailCounts.get(sourceName) || 0) + 1;
-  sourceFailCounts.set(sourceName, count);
+  const current = sourceFailState.get(sourceName) || { count: 0, lastFailure: 0 };
+  
+  if (current.count >= CIRCUIT_BREAKER_THRESHOLD && Date.now() - current.lastFailure > CIRCUIT_BREAKER_COOLDOWN) {
+    current.count = 0; // Cooldown expired, let's reset to allow a test fetch
+  }
+  
+  current.count++;
+  current.lastFailure = Date.now();
+  sourceFailState.set(sourceName, current);
 
-  if (sourceQuality >= 90) {
-    // Tier 1 (Quality >= 90): Exponential cooldown, NEVER permanently disable
-    if (count > 0) {
-      const cooldownCycles = Math.min(Math.pow(2, count - 1), 8);
-      console.error(`[Fetcher] [CircuitBreaker] 🛡️ Protected source ${sourceName} failed ${count} times. Cooldown for ${cooldownCycles} cycles.`);
-      // We don't disable them. Returning false to let the cooldown logic (if any) handle skipped fetches.
-    }
-  } else if (sourceQuality >= 70) {
-    // Tier 2 (Quality 70-89): Auto-disable after 20 consecutive failures
-    if (count >= 20) {
-      console.error(`[Fetcher] [CircuitBreaker] ⚡ Tier-2 source ${sourceName} hit ${count} failures — AUTO-DISABLING.`);
-      try {
-        const slug = sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-        const pub = await storage.getPublisherBySlug(slug);
-        if (pub) {
-          await db.update(publishersTable).set({ active: false, failCount: count }).where(eq(publishersTable.id, pub.id));
-        }
-      } catch (dbErr) {
-        console.error(`[Fetcher] [CircuitBreaker] DB update failed for ${sourceName}:`, dbErr);
-      }
-      return true; // circuit is open
-    }
-  } else {
-    // Tier 3 (Quality < 70): Auto-disable after 10 failures
-    if (count >= 10) {
-      console.error(`[Fetcher] [CircuitBreaker] ⚡ Tier-3 source ${sourceName} hit ${count} failures — AUTO-DISABLING.`);
-      try {
-        const slug = sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-        const pub = await storage.getPublisherBySlug(slug);
-        if (pub) {
-          await db.update(publishersTable).set({ active: false, failCount: count }).where(eq(publishersTable.id, pub.id));
-        }
-      } catch (dbErr) {
-        console.error(`[Fetcher] [CircuitBreaker] DB update failed for ${sourceName}:`, dbErr);
-      }
-      return true; // circuit is open
-    }
+  if (current.count >= CIRCUIT_BREAKER_THRESHOLD) {
+    console.error(`[Fetcher] [CircuitBreaker] ⚡ Source ${sourceName} hit ${current.count} failures — COOLDOWN for 5 minutes.`);
+    return true; // circuit is open
   }
 
   // Persist fail count
@@ -171,7 +146,7 @@ async function recordSourceFailure(sourceName: string, sourceQuality: number = 6
     const slug = sourceName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const pub = await storage.getPublisherBySlug(slug);
     if (pub) {
-      await db.update(publishersTable).set({ failCount: count }).where(eq(publishersTable.id, pub.id));
+      await db.update(publishersTable).set({ failCount: current.count }).where(eq(publishersTable.id, pub.id));
     }
   } catch (_) { }
 
@@ -229,7 +204,8 @@ async function processSourceBatch(
   sources: any[],
   catMap: Record<string, string>,
   systemUserId: string,
-  biasTier: string
+  biasTier: string,
+  publishVolumeMap: Map<string, number>
 ): Promise<number> {
   if (sources.length === 0) {
     console.log(`[Fetcher] ${biasTier}: No sources to fetch.`);
@@ -249,6 +225,15 @@ async function processSourceBatch(
       let sourceStart = Date.now();
       let sourceEnqueued = 0;
       try {
+        // --- Circuit Breaker Check ---
+        const currentCB = sourceFailState.get(source.name);
+        if (currentCB && currentCB.count >= CIRCUIT_BREAKER_THRESHOLD) {
+           if (Date.now() - currentCB.lastFailure < CIRCUIT_BREAKER_COOLDOWN) {
+             console.log(`[Fetcher] [CircuitBreaker] SKIP ${source.name} (in 5-min cooldown)`);
+             return;
+           }
+        }
+
         await new Promise(resolve => setTimeout(resolve, index * 800));
         sourceStart = Date.now();
         console.log(`[Fetcher] [${biasTier}] Processing ${source.name}...`);
@@ -259,9 +244,20 @@ async function processSourceBatch(
           const lastFetchedAt = pub.lastFetchedAt ? new Date(pub.lastFetchedAt).getTime() : 0;
           const minsSinceFetch = (Date.now() - lastFetchedAt) / 60000;
 
-          // T1 (Quality >= 90): 15 min | T2 (75-89): 30 min | T3 (<75): 60 min
-          // Accelerated for 20+ source clustering goal.
-          const tierInterval = source.quality >= 90 ? 15 : (source.quality >= 75 ? 30 : 60);
+          // TIER INTERVAL BASED ON 7-DAY PUBLISH VOLUME (Post-circuit-breaker)
+          const sevenDayVolume = publishVolumeMap.get(pub.id) || 0;
+          let tierInterval = 60;
+          
+          if (sevenDayVolume > 150) {
+            tierInterval = 10; // Extremely high volume -> 10m
+          } else if (sevenDayVolume > 70) {
+            tierInterval = 15; // High volume -> 15m
+          } else if (sevenDayVolume > 20) {
+            tierInterval = 30; // Medium volume -> 30m
+          } else {
+            // Fallback for low volume or new sources
+            tierInterval = source.quality >= 90 ? 15 : (source.quality >= 75 ? 30 : 60);
+          }
 
           if (minsSinceFetch < tierInterval) {
             console.log(`[Fetcher] [Tiering] SKIP ${source.name} (Quality ${source.quality}) — fetched ${Math.round(minsSinceFetch)}m ago, interval is ${tierInterval}m`);
@@ -279,21 +275,34 @@ async function processSourceBatch(
         if (pub?.lastModified) headers['If-Modified-Since'] = pub.lastModified;
 
         // ── Retry-wrapped fetch ──
-        const response = await fetchWithRetry(source.url!, headers, source.name);
+        let response: Response;
+        let feed: Parser.Output<any>;
+        try {
+          const fetchResult = await timed("Discovery", async () => {
+            const res = await fetchWithRetry(source.url!, headers, source.name);
+            if (res.status === 304) {
+              return { is304: true, res, parsedFeed: null };
+            }
+            const xmlText = await res.text();
+            const parsed = await parser.parseString(xmlText);
+            return { is304: false, res, parsedFeed: parsed };
+          });
 
-        if (response.status === 304) {
-          console.log(`[Fetcher] [ConditionalGet] 304 Not Modified for ${source.name}. Skipping.`);
-          if (pub) {
-            await db.update(publishersTable).set({ lastFetchedAt: new Date() }).where(eq(publishersTable.id, pub.id));
+          if (fetchResult.is304) {
+            console.log(`[Fetcher] [ConditionalGet] 304 Not Modified for ${source.name}. Skipping.`);
+            if (pub) {
+              await db.update(publishersTable).set({ lastFetchedAt: new Date() }).where(eq(publishersTable.id, pub.id));
+            }
+            return;
           }
-          return;
+          response = fetchResult.res;
+          feed = fetchResult.parsedFeed!;
+        } catch (fetchErr) {
+          throw fetchErr;
         }
 
         const newEtag = response.headers.get('etag');
         const newLastModified = response.headers.get('last-modified');
-
-        const xml = await response.text();
-        const feed = await parser.parseString(xml);
 
         // Update publisher fetch metadata
         if (pub) {
@@ -306,89 +315,110 @@ async function processSourceBatch(
 
         const validArticles: any[] = [];
 
-        for (const item of feed.items.slice(0, 30)) {
-          const url = item.link || item.guid || "";
-          if (!url || (url.endsWith('.html') && url.includes('/device/rss'))) continue;
-
-          const pubDate = new Date(item.pubDate || "");
-          if (!isNaN(pubDate.getTime()) && Date.now() - pubDate.getTime() > 5 * 24 * 60 * 60 * 1000) {
-            continue;
-          }
-
-          // ── PRE-INGESTION QUALITY GATE ──
-          const articleTitle = item.title || "";
-          const articleDesc = item.contentSnippet || (item as any).description || "";
-          const verdict = preIngestQualityGate(
-            articleTitle,
-            articleDesc,
-            url,
-            item.pubDate,
-            source.quality,
-            totalArticlesEnqueued < 50
-          );
-
-          if (!verdict.pass) {
-            if (sourceEnqueued === 0 || Math.random() < 0.1) {
-              console.log(formatRejection(articleTitle, source.name, verdict));
+        await timed("Pre-Ingestion Filter", async () => {
+          // --- BATCH DB LOOKUP FOR ALL URLs IN FEED ---
+          const feedUrls = feed.items.slice(0, 30).map(item => item.link || item.guid || "").filter(Boolean);
+          const existingDbUrls = new Set<string>();
+          if (feedUrls.length > 0) {
+            try {
+              const existingInDb = await db.select({ url: articles.url })
+                .from(articles)
+                .where(inArray(articles.url, feedUrls));
+              existingInDb.forEach((a: any) => existingDbUrls.add(a.url));
+            } catch (e) {
+              console.error(`[Fetcher] Batched DB Dedup check failed for ${source.name}:`, e);
             }
-            continue;
           }
 
-          let domain = "";
-          try {
-            domain = new URL(url).hostname.replace('www.', '');
-          } catch (e) {
-            domain = "unknown";
-          }
+          for (const item of feed.items.slice(0, 30)) {
+            const url = item.link || item.guid || "";
+            if (!url || (url.endsWith('.html') && url.includes('/device/rss'))) continue;
 
-          const articleData: any = {
-            title: item.title || "",
-            description: item.contentSnippet || (item as any).description || "",
-            url: url,
-            domain: domain,
-            image: item.enclosure?.url || (item as any).media?.["$"]?.url || null,
-            publishedAt: item.pubDate || new Date().toISOString(),
-            source: { name: source.name, url: source.url! },
-            embedding: undefined,
-            trace: {
-              fetched: new Date().toISOString(),
-              bias_tier: biasTier,
-              publisher_quality: source.quality,
-              publisher_warning: source.warning
+            const pubDate = new Date(item.pubDate || "");
+            if (!isNaN(pubDate.getTime()) && Date.now() - pubDate.getTime() > 5 * 24 * 60 * 60 * 1000) {
+              console.log(`[Stage 0 Reject] Stale article (>5 days): ${item.title}`);
+              continue;
             }
-          };
 
-          // --- DEDUP TIER 1: URL Hash ---
-          const normUrl = normalizeUrl(url);
-          const urlHash = createHash("sha256").update(normUrl).digest("hex");
-          if (PROCESSED_URL_HASHES.has(urlHash)) continue;
+            // ── PRE-INGESTION QUALITY GATE ──
+            const articleTitle = item.title || "";
+            const articleDesc = item.contentSnippet || (item as any).description || "";
+            const verdict = preIngestQualityGate(
+              articleTitle,
+              articleDesc,
+              url,
+              item.pubDate,
+              source.quality,
+              totalArticlesEnqueued < 50
+            );
 
-          // --- DEDUP TIER 2: Title Shingle ---
-          const domainTitleKey = `${domain}:${articleData.title}`;
-          if (PROCESSED_TITLE_SHINGLES.has(domainTitleKey)) continue;
+            if (!verdict.pass) {
+              if (sourceEnqueued === 0 || Math.random() < 0.1) {
+                console.log(formatRejection(articleTitle, source.name, verdict));
+              }
+              continue;
+            }
 
-          // --- DEDUP TIER 3: Database URL check ---
-          try {
-            const existingInDb = await db.select({ id: articles.id })
-              .from(articles)
-              .where(eq(articles.url, url))
-              .limit(1);
-            if (existingInDb && existingInDb.length > 0) {
+            let domain = "";
+            try {
+              domain = new URL(url).hostname.replace('www.', '');
+            } catch (e) {
+              domain = "unknown";
+            }
+
+            const articleData: any = {
+              title: item.title || "",
+              description: item.contentSnippet || (item as any).description || "",
+              url: url,
+              domain: domain,
+              image: item.enclosure?.url || (item as any).media?.["$"]?.url || null,
+              publishedAt: item.pubDate || new Date().toISOString(),
+              source: { name: source.name, url: source.url! },
+              embedding: undefined,
+              trace: {
+                fetched: new Date().toISOString(),
+                bias_tier: biasTier,
+                publisher_quality: source.quality,
+                publisher_warning: source.warning
+              }
+            };
+
+            // --- DEDUP TIER 1: URL Hash ---
+            const normUrl = normalizeUrl(url);
+            const urlHash = createHash("sha256").update(normUrl).digest("hex");
+            if (PROCESSED_URL_HASHES.has(urlHash)) {
+              console.log(`[Stage 0 Reject] Duplicate URL Hash: ${url}`);
+              continue;
+            }
+
+            // --- DEDUP TIER 2: Title Shingle ---
+            const domainTitleKey = `${domain}:${articleData.title}`;
+            if (PROCESSED_TITLE_SHINGLES.has(domainTitleKey)) {
+              console.log(`[Stage 0 Reject] Duplicate Title Shingle: ${articleData.title}`);
+              continue;
+            }
+
+            // --- DEDUP TIER 3: Database URL check (now batched) ---
+            if (existingDbUrls.has(url)) {
+              console.log(`[Stage 0 Reject] Duplicate in DB: ${url}`);
               PROCESSED_URL_HASHES.add(urlHash);
               continue;
             }
-          } catch (e) {
-            console.error(`[Fetcher] DB Dedup check failed for ${url}:`, e);
-          }
 
-          validArticles.push(articleData);
-        }
+            validArticles.push(articleData);
+          }
+        });
 
         if (validArticles.length > 0) {
           // --- DEDUP TIER 4: E5 Semantic (BATCHED API call) ---
-          const vectors = await embeddingService.embedBatch(
-            validArticles.map(a => a.title + ". " + (a.description || ""))
-          );
+          const vectors = await timed("Embedding", async () => {
+            return await embeddingService.embedBatch(
+              validArticles.map(a => ({
+                text: a.title + ". " + (a.description || ""),
+                urlHash: createHash("sha256").update(normalizeUrl(a.url)).digest("hex")
+              }))
+            );
+          });
 
           for (let i = 0; i < validArticles.length; i++) {
             const articleData = validArticles[i];
@@ -396,14 +426,6 @@ async function processSourceBatch(
 
             if (vector) {
               articleData.embedding = vector;
-              try {
-                const dupCheck = await embeddingService.isDuplicateWithVector(vector, articleData.domain);
-                if (dupCheck.is_duplicate) {
-                  if (dupCheck.duplicate_of_domain === articleData.domain || !articleData.domain || articleData.domain === "unknown") {
-                    continue;
-                  }
-                }
-              } catch (_e) { }
             }
 
             const normUrlForHash = normalizeUrl(articleData.url);
@@ -491,6 +513,22 @@ export async function fetchRealNews(): Promise<number> {
 
   let totalCycleEnqueued = 0;
 
+  // PRE-CALCULATE 7-DAY PUBLISH VOLUME FOR FREQUENCY SCALING
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  
+  const volumeData = await db.execute(sql`
+    SELECT source_id, COUNT(*)::int as count 
+    FROM articles 
+    WHERE published_at >= ${sevenDaysAgo.toISOString()} 
+    GROUP BY source_id
+  `);
+  
+  const publishVolumeMap = new Map<string, number>();
+  volumeData.rows.forEach((row: any) => {
+    publishVolumeMap.set(row.source_id, Number(row.count));
+  });
+
   // Process in QUALITY-FIRST order:
   // 1. AGGREGATORS (AP, Reuters, BBC) — seed clusters with trusted wire sources
   // 2. CENTER — neutral sources build the backbone
@@ -500,7 +538,7 @@ export async function fetchRealNews(): Promise<number> {
     const sources = RSS_SOURCES[biasTier] || [];
     // Sort sources within each tier by quality (highest first)
     const sorted = [...sources].sort((a, b) => b.quality - a.quality);
-    totalCycleEnqueued += await processSourceBatch(sorted, catMap, systemUser.id, biasTier);
+    totalCycleEnqueued += await processSourceBatch(sorted, catMap, systemUser.id, biasTier, publishVolumeMap);
   }
 
   console.log(`[Fetcher] BUCKETED CYCLE COMPLETE. Total: ${totalCycleEnqueued} articles.`);
@@ -571,7 +609,7 @@ async function fetchSingleSource(source: any) {
   const systemUser = await storage.getUserByEmail("system@modernnews.com") ||
     await storage.getUserByEmail("admin@newshub.com");
   if (!systemUser) return;
-  await processSourceBatch([source], catMap, systemUser.id, "CUSTOM");
+  await processSourceBatch([source], catMap, systemUser.id, "CUSTOM", new Map());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

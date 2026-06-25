@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth-context";
 import { type ArticleWithDetails } from "@shared/schema";
 import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
+import { Link } from "wouter";
 
 function SkeletonCard() {
   return (
@@ -106,9 +107,9 @@ export default function BookmarksPage() {
             <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-6">
               Click the bookmark icon on any article to save it here for later reading.
             </p>
-            <a href="/" className="px-6 py-2.5 bg-foreground text-background text-xs font-black uppercase tracking-widest hover:bg-accent-editorial transition-colors">
-              Browse Stories →
-            </a>
+            <Link href="/" className="px-6 py-2.5 bg-foreground text-background text-xs font-black uppercase tracking-widest hover:bg-accent-editorial transition-colors inline-block">
+              Explore the News
+            </Link>
           </div>
         ) : (
           <motion.div

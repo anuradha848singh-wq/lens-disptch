@@ -15,8 +15,8 @@ interface BlindspotFeedProps {
 
 export function BlindspotFeed({ articles }: BlindspotFeedProps) {
   // Logic: Filter stories where one side is missing coverage
-  const leftOnly = articles.filter(a => (a.proEstablishmentCount || 0) > 0 && (a.proOppositionCount || 0) === 0).slice(0, 3);
-  const rightOnly = articles.filter(a => (a.proOppositionCount || 0) > 0 && (a.proEstablishmentCount || 0) === 0).slice(0, 3);
+  const leftOnly = articles.filter(a => (a.proOppositionCount || 0) > 0 && (a.proEstablishmentCount || 0) === 0).slice(0, 3);
+  const rightOnly = articles.filter(a => (a.proEstablishmentCount || 0) > 0 && (a.proOppositionCount || 0) === 0).slice(0, 3);
 
   if (leftOnly.length === 0 && rightOnly.length === 0) {
     return (

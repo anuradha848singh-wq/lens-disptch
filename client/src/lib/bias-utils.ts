@@ -5,7 +5,7 @@
 export function deriveBias(s: any): "left" | "center" | "right" {
   if (!s) return "center";
   const b = (s.bias || s.publisher?.biasRating || "").toLowerCase();
-  if (b.includes("left")) return "left";
-  if (b.includes("right")) return "right";
+  if (b.includes("left") || b.includes("pro_opposition")) return "left";
+  if (b.includes("right") || b.includes("pro_establishment")) return "right";
   return "center";
 }

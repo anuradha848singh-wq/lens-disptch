@@ -33,11 +33,11 @@ export function ForeignGazePanel({ clusterId }: { clusterId: string }) {
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="relative overflow-hidden bg-gradient-to-br from-indigo-500/5 via-transparent to-blue-500/5 border border-indigo-500/10 rounded-3xl p-6 md:p-8 mb-10"
+      className="relative overflow-hidden bg-gradient-to-br from-indigo-500/5 via-transparent to-blue-500/5 border border-indigo-500/10 rounded-xl p-4 mb-4"
     >
-      <div className="flex items-center gap-2 mb-6">
-        <div className="p-2 bg-indigo-500/10 rounded-xl">
-          <Globe className="w-5 h-5 text-indigo-600" />
+      <div className="flex items-center gap-2 mb-4">
+        <div className="p-1.5 bg-indigo-500/10 rounded-md">
+          <Globe className="w-4 h-4 text-indigo-600" />
         </div>
         <div>
           <h3 className="text-sm font-black uppercase tracking-widest text-indigo-900">Foreign Gaze Engine</h3>
@@ -52,10 +52,10 @@ export function ForeignGazePanel({ clusterId }: { clusterId: string }) {
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 relative">
         <div className="absolute inset-y-0 left-1/2 w-px bg-indigo-500/10 hidden md:block" />
         
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
               <Map className="w-3 h-3" /> Domestic Narrative
@@ -67,7 +67,7 @@ export function ForeignGazePanel({ clusterId }: { clusterId: string }) {
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
               <Globe className="w-3 h-3" /> International Perspective
@@ -98,11 +98,11 @@ export function ExecutiveBriefing({ clusterId }: { clusterId: string }) {
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="bg-slate-900 text-slate-100 rounded-3xl p-8 mb-10 shadow-2xl shadow-slate-900/20"
+      className="bg-slate-900 text-slate-100 rounded-xl p-4 mb-4 shadow-lg shadow-slate-900/20"
     >
-      <div className="flex items-center gap-3 mb-8">
-        <div className="p-2.5 bg-amber-500 rounded-xl shadow-lg shadow-amber-500/20">
-          <ShieldCheck className="w-6 h-6 text-slate-900" />
+      <div className="flex items-center gap-2 mb-4">
+        <div className="p-1.5 bg-amber-500 rounded-md shadow-sm shadow-amber-500/20">
+          <ShieldCheck className="w-4 h-4 text-slate-900" />
         </div>
         <div>
           <h3 className="text-xs font-black uppercase tracking-widest text-amber-500">Executive Briefing</h3>
@@ -110,15 +110,15 @@ export function ExecutiveBriefing({ clusterId }: { clusterId: string }) {
         </div>
       </div>
 
-      <div className="space-y-8">
+      <div className="space-y-4">
         <div>
-          <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Core Summary</h4>
-          <p className="text-lg font-medium leading-relaxed text-slate-200">
+          <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500 mb-2">Core Summary</h4>
+          <p className="text-sm font-medium leading-relaxed text-slate-200">
             {data.summary}
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-4 flex items-center gap-2">
               <Users className="w-3 h-3" /> Key Stakeholders
@@ -133,12 +133,12 @@ export function ExecutiveBriefing({ clusterId }: { clusterId: string }) {
           </div>
 
           <div>
-            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-4 flex items-center gap-2">
+            <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500 mb-2 flex items-center gap-2">
               <AlertCircle className="w-3 h-3 text-amber-500" /> Framing Discrepancies
             </h4>
-            <ul className="space-y-2">
+            <ul className="space-y-1">
               {data.discrepancies?.map((point: string, i: number) => (
-                <li key={i} className="text-xs text-slate-400 flex items-start gap-2 leading-relaxed">
+                <li key={i} className="text-[11px] text-slate-400 flex items-start gap-2 leading-relaxed">
                   <span className="w-1 h-1 bg-amber-500 rounded-full mt-1.5 shrink-0" />
                   {point}
                 </li>
@@ -163,14 +163,14 @@ export function MarketImpact({ clusterId }: { clusterId: string }) {
   if (error || !data || !data.tickers?.length) return null;
 
   return (
-    <Card className="border-emerald-500/20 bg-emerald-500/5 overflow-hidden rounded-2xl mb-6">
-      <div className="p-4 border-b border-emerald-500/10 bg-emerald-500/10 flex items-center justify-between">
+    <Card className="border-emerald-500/20 bg-emerald-500/5 overflow-hidden rounded-xl mb-4">
+      <div className="p-3 border-b border-emerald-500/10 bg-emerald-500/10 flex items-center justify-between">
         <h3 className="text-[10px] font-black uppercase tracking-widest text-emerald-700 flex items-center gap-1.5">
           <LineChart className="w-3 h-3" /> Market Intelligence
         </h3>
         <TrendingUp className="w-3 h-3 text-emerald-600" />
       </div>
-      <div className="p-4 space-y-4">
+      <div className="p-3 space-y-2">
         <div className="flex flex-wrap gap-2">
           {data.tickers.map((ticker: string) => (
             <Badge key={ticker} className="bg-emerald-600 hover:bg-emerald-700 font-black px-2 py-0.5">
@@ -198,8 +198,8 @@ export function EntityQuoteTracker({ clusterId }: { clusterId: string }) {
   if (error || !data || !data.quotes?.length) return null;
 
   return (
-    <div className="bg-card border border-border rounded-2xl overflow-hidden mb-6">
-      <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
+    <div className="bg-card border border-border rounded-xl overflow-hidden mb-4">
+      <div className="px-3 py-2 border-b border-border bg-secondary/30 flex items-center justify-between">
         <h3 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
           <Quote className="w-3 h-3" /> Direct Quote Tracker
         </h3>

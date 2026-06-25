@@ -56,8 +56,8 @@ export function TrendingTopicsWidget({ articles }: { articles?: ArticleWithDetai
         ) : (
           topics.map((t: any, i: number) => {
             const isApiData = !!t.name;
-            const rightOnly = !isApiData && (t.proEstablishmentCount || 0) === 0 && (t.proOppositionCount || 0) >= 2;
-            const leftOnly  = !isApiData && (t.proOppositionCount || 0) === 0 && (t.proEstablishmentCount || 0) >= 2;
+            const rightOnly = !isApiData && (t.proOppositionCount || 0) === 0 && (t.proEstablishmentCount || 0) >= 2;
+            const leftOnly  = !isApiData && (t.proEstablishmentCount || 0) === 0 && (t.proOppositionCount || 0) >= 2;
             return (
               <div
                 key={t.id || t.name || i}
@@ -303,7 +303,7 @@ export function PolarizingWidget({ articles }: { articles: ArticleWithClusterCou
   return (
     <div
       className="bg-[#B91C1C] rounded-xl text-white overflow-hidden shadow-md p-6 relative group cursor-pointer hover:bg-red-800 transition-colors"
-      onClick={() => polarizing?.id && setLocation(`/article/${polarizing.id}`)}
+      onClick={() => polarizing?.id && setLocation(`/compare/${polarizing.id}`)}
     >
       <h2 className="text-[10px] font-black uppercase tracking-[.2em] flex items-center gap-2 mb-4 opacity-90">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -326,6 +326,51 @@ export function PolarizingWidget({ articles }: { articles: ArticleWithClusterCou
         <svg width="120" height="120" viewBox="0 0 24 24" fill="currentColor">
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─── Latest Updates Widget ─────────────────────────────────────────────────────
+export function LatestUpdatesWidget({ articles }: { articles: ArticleWithDetails[] }) {
+  const [, setLocation] = useLocation();
+
+  // Show 6 dense articles that aren't in the very top hero
+  const latest = articles.slice(4, 10);
+
+  if (latest.length === 0) return null;
+
+  return (
+    <div className="bg-white border border-border/60 rounded-xl overflow-hidden shadow-sm">
+      <div className="p-4 border-b border-border/40 flex items-center justify-between">
+        <h2 className="text-[11px] font-black uppercase tracking-[.2em] flex items-center gap-2 text-foreground">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-600">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          Latest Updates
+        </h2>
+      </div>
+
+      <div className="divide-y divide-border/40">
+        {latest.map((article, i) => (
+          <div
+            key={article.id || i}
+            className="p-4 flex gap-3 hover:bg-secondary/40 cursor-pointer transition-colors group"
+            onClick={() => article.id && setLocation(`/article/${article.id}`)}
+          >
+            <div className="flex-1 space-y-1.5">
+              <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-muted-foreground">
+                <span className="text-red-600 font-bold">{article.publisher?.name || "News"}</span>
+                <span>•</span>
+                <span>{article.publishedAt ? new Date(article.publishedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Just now'}</span>
+              </div>
+              <h3 className="font-serif text-[14px] leading-snug font-bold text-foreground group-hover:text-red-600 transition-colors line-clamp-2">
+                {article.title}
+              </h3>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

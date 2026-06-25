@@ -20,8 +20,8 @@ export function TrendsDonut({ left, center, right, total, onCompareClick }: Donu
 
   return (
     <div className="w-full">
-      <div className="flex items-center justify-between mb-6">
-        <h4 className="text-sm font-black text-foreground">Trends Coverage</h4>
+      <div className="flex items-center justify-between mb-4">
+        <h4 className="text-[11px] font-black uppercase tracking-widest text-foreground">Trends Coverage</h4>
         <div className="flex items-center text-[10px] font-bold bg-primary/10 text-primary px-2 py-1 rounded">
           <span className="text-blue-600">L {lP}%</span>
           <span className="mx-1 text-border">|</span>
@@ -31,7 +31,7 @@ export function TrendsDonut({ left, center, right, total, onCompareClick }: Donu
         </div>
       </div>
 
-      <div className="flex items-center justify-between bg-secondary/20 rounded-2xl p-6 border border-border">
+      <div className="flex items-center justify-between bg-secondary/20 rounded-xl p-4 border border-border">
         {/* Overlapping Circles */}
         <div className="relative h-20 w-52 flex items-center justify-center">
           {/* Left Circle */}

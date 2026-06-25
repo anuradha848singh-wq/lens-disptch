@@ -155,8 +155,8 @@ export default function PublishersPage() {
 
   const wireServices = filtered.filter(p => ["Reuters", "Associated Press", "Bloomberg", "AFP"].includes(p.name));
   const usCenter = filtered.filter(p => p.country === "US" && p.biasRating === "neutral" && !wireServices.includes(p));
-  const usLeft = filtered.filter(p => p.country === "US" && p.biasRating === "pro_establishment");
-  const usRight = filtered.filter(p => p.country === "US" && p.biasRating === "pro_opposition");
+  const usLeft = filtered.filter(p => p.country === "US" && p.biasRating === "pro_opposition");
+  const usRight = filtered.filter(p => p.country === "US" && p.biasRating === "pro_establishment");
   const ukSources = filtered.filter(p => ["UK", "GB"].includes(p.country) && !wireServices.includes(p));
   const intlSources = filtered.filter(p => !["US", "UK", "GB"].includes(p.country) && !wireServices.includes(p));
 
@@ -181,14 +181,14 @@ export default function PublishersPage() {
           {/* Master Spectrum View */}
           <div className="flex flex-col mb-10 max-w-3xl">
             <div className="flex justify-between text-[10px] font-black uppercase tracking-widest mb-1.5 px-1">
-              <span className="text-blue-700">{proEstablishmentCount} Leaning Left</span>
+              <span className="text-blue-700">{proOppositionCount} Leaning Left</span>
               <span className="text-violet-700">{neutralCount} Centered</span>
-              <span className="text-red-700">{proOppositionCount} Leaning Right</span>
+              <span className="text-red-700">{proEstablishmentCount} Leaning Right</span>
             </div>
             <div className="w-full h-3 flex overflow-hidden rounded-full shadow-sm">
-              <div className="bg-blue-600 border-r border-background" style={{ width: totalSources > 0 ? `${(proEstablishmentCount/totalSources)*100}%` : '33%' }} />
+              <div className="bg-blue-600 border-r border-background" style={{ width: totalSources > 0 ? `${(proOppositionCount/totalSources)*100}%` : '33%' }} />
               <div className="bg-violet-600 border-r border-background" style={{ width: totalSources > 0 ? `${(neutralCount/totalSources)*100}%` : '34%' }} />
-              <div className="bg-red-600" style={{ width: totalSources > 0 ? `${(proOppositionCount/totalSources)*100}%` : '33%' }} />
+              <div className="bg-red-600" style={{ width: totalSources > 0 ? `${(proEstablishmentCount/totalSources)*100}%` : '33%' }} />
             </div>
           </div>
 

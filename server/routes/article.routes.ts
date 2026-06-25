@@ -4,7 +4,7 @@ import { authenticateUser, optionalAuth, requireRole } from "../auth";
 import { insertArticleSchema } from "../../shared/schema";
 import { cache } from "../cache";
 import { db } from "../db";
-import { articles, publishers, clusters, homepageCache, userPreferences } from "../../shared/schema";
+import { articles, publishers, clusters, homepageCache, userPreferences, clusterScores } from "../../shared/schema";
 import { eq, desc, and, sql } from "drizzle-orm";
 import { fetchFullContent } from "../article-scraper";
 import { findSourcesForArticle } from "../topic-search";
@@ -249,6 +249,14 @@ articleRouter.get("/:id/full", optionalAuth, async (req, res) => {
       });
     }
 
+    // 6.5. Fetch cluster scores for Multi-Lens Mode
+    let multiLensScores = [];
+    if (article.clusterId) {
+      multiLensScores = await db.select()
+        .from(clusterScores)
+        .where(eq(clusterScores.clusterId, article.clusterId));
+    }
+
     // 7. Assemble and return the complete payload
     publicCache(res, 60); // 1 minute Cache-Control for full page package
     res.json({
@@ -257,7 +265,8 @@ articleRouter.get("/:id/full", optionalAuth, async (req, res) => {
       deepIntelligence,
       related,
       similar,
-      publisherArticles
+      publisherArticles,
+      multiLensScores
     });
   } catch (error) {
     console.error("Get full article data pack error:", error);
@@ -421,6 +430,58 @@ articleRouter.post("/:id/share", optionalAuth, async (req, res) => {
   } catch (error) {
     console.error("Share tracking error:", error);
     res.status(500).json({ error: "Failed to track share" });
+  }
+});
+
+articleRouter.get("/:id/omissions", optionalAuth, async (req, res) => {
+  try {
+    const articleId = req.params.id;
+    // 1. Get the article to find its cluster
+    const article = await storage.getArticle(articleId);
+    if (!article || !article.clusterId) {
+      return res.json([]);
+    }
+
+    // 2. Fetch all articles in the cluster
+    const clusterArticles = await db.query.articles.findMany({
+      where: eq(articles.clusterId, article.clusterId),
+      with: { publisher: true }
+    });
+
+    // 3. Aggregate entities from cluster
+    const thisArticleEntities = new Set((article.entities as string[]) || []);
+    
+    // Map of omittedEntityName -> Set of publisher names that mentioned it
+    const omissionsMap = new Map<string, Set<string>>();
+
+    for (const ca of clusterArticles) {
+      if (ca.id === article.id) continue;
+      
+      const entities = (ca.entities as string[]) || [];
+      const pubName = ca.publisher?.name || "Unknown";
+      
+      for (const e of entities) {
+        if (!thisArticleEntities.has(e)) {
+          if (!omissionsMap.has(e)) omissionsMap.set(e, new Set());
+          omissionsMap.get(e)!.add(pubName);
+        }
+      }
+    }
+
+    // 4. Filter and format output
+    const omissions = Array.from(omissionsMap.entries())
+      .map(([entity, publishers]) => ({
+        entity,
+        mentionedBy: Array.from(publishers)
+      }))
+      .filter(o => o.mentionedBy.length >= 2) // High frequency filter
+      .sort((a, b) => b.mentionedBy.length - a.mentionedBy.length)
+      .slice(0, 10); // Top 10 omissions
+
+    res.json(omissions);
+  } catch (error) {
+    console.error("Omissions API error:", error);
+    res.status(500).json({ error: "Failed to fetch article omissions" });
   }
 });
 

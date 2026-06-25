@@ -8,6 +8,12 @@ import { db } from "./db";
 import { recordClusterEvent } from "./metrics";
 import { embeddingService } from "./lib/embeddings-client";
 import { QUALITY_GATES } from "./rss-sources";
+import { getCountryProfile } from "../shared/country-profiles/registry";
+import { SCORER_REGISTRY } from "./scorers/registry";
+import { clusterScores, EMBEDDING_DIM } from "../shared/schema";
+import { timed } from "./benchmark-collector";
+import { normalizeEntity } from "./lib/entity-aliases";
+import nlp from "compromise";
 
 const PUBLISHER_BIAS_DB: Record<string, PublisherInfo> = EXTENDED_PUBLISHER_BIAS_DB;
 
@@ -39,14 +45,14 @@ export interface ArticleContext {
 
 export function generateEmbedding(text: string): number[] {
   const tokens = text.toLowerCase().split(/\W+/).filter(t => t.length > 3);
-  const vector = new Array(768).fill(0);
+  const vector = new Array(EMBEDDING_DIM).fill(0);
   for (const token of tokens) {
     let hash = 0;
     for (let i = 0; i < token.length; i++) {
       hash = (hash << 5) - hash + token.charCodeAt(i);
       hash |= 0;
     }
-    const idx = Math.abs(hash) % 768;
+    const idx = Math.abs(hash) % EMBEDDING_DIM;
     vector[idx] += 1;
   }
   // Normalize
@@ -153,28 +159,29 @@ export function extractEntities(title: string, description: string): EnrichedEnt
 
   personMatches.forEach(p => {
     if (!orgSuffixes.test(p) && !locSuffixes.test(p)) {
-      entities.persons.add(p);
+      entities.persons.add(normalizeEntity(p));
     }
   });
 
   // 2. Organizations / Acronyms
   // e.g. "NASA", "FBI", "Apple", "Microsoft", "United Nations"
   const acronyms = text.match(/\b[A-Z]{2,5}\b/g) || [];
-  acronyms.forEach(e => entities.organizations.add(e));
+  acronyms.forEach(e => entities.organizations.add(normalizeEntity(e)));
 
   const orgMatches = text.match(/\b[A-Z][a-z]+ (?:Corp|Inc|Ltd|Group|Bank|University|Systems|Technologies|Motors|Airways)\b/g) || [];
-  orgMatches.forEach(e => entities.organizations.add(e));
+  orgMatches.forEach(e => entities.organizations.add(normalizeEntity(e)));
 
   // 3. Locations
   // e.g. "Israel", "Gaza", "Washington", "New York", "Ukraine"
   const places = text.match(/\b(Israel|Gaza|Ukraine|Russia|China|Taiwan|India|Pakistan|USA|UK|London|Paris|Berlin|Tokyo|Beijing|Moscow|Tehran|Hormuz|Baghdad|Kyiv)\b/g) || [];
-  places.forEach(e => entities.locations.add(e));
+  places.forEach(e => entities.locations.add(normalizeEntity(e)));
 
   // 4. Misc / Single Proper Nouns
   const singleProper = text.match(/\b[A-Z][a-z]{3,}\b/g) || [];
   singleProper.forEach(e => {
-    if (!entities.persons.has(e) && !entities.organizations.has(e) && !entities.locations.has(e)) {
-      entities.misc.add(e);
+    const norm = normalizeEntity(e);
+    if (!entities.persons.has(norm) && !entities.organizations.has(norm) && !entities.locations.has(norm)) {
+      entities.misc.add(norm);
     }
   });
 
@@ -793,12 +800,19 @@ interface ClusterIndex {
   fingerprint: Set<string>;
   titleTokens: Set<string>;
   representatives: Array<{ title: string; embedding?: number[] | null }>;
+  centroid: number[] | null;
+  articleCount: number;
   latestPublishedAt: number;
 }
 
 const clusterKeywordIndex = new Map<string, ClusterIndex>();
 let clusterKeywordIndexBuiltAt = 0;
 const CLUSTER_INDEX_TTL = 5 * 60 * 1000;
+
+export function clearClusterIndexCache() {
+  clusterKeywordIndex.clear();
+  clusterKeywordIndexBuiltAt = 0;
+}
 const CLUSTER_INDEX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // rebuild every 5 mins
 
@@ -831,6 +845,8 @@ async function ensureClusterIndexFresh(): Promise<void> {
         fingerprint: new Set(),
         titleTokens: new Set(),
         representatives: [],
+        centroid: null,
+        articleCount: 0,
         latestPublishedAt: 0
       });
     }
@@ -849,6 +865,17 @@ async function ensureClusterIndexFresh(): Promise<void> {
     if (data.representatives.length < 5) {
       data.representatives.push({ title: a.title, embedding: a.embedding as any });
     }
+    if (a.embedding) {
+      const v = typeof a.embedding === 'string' ? JSON.parse(a.embedding) : a.embedding;
+      if (!data.centroid) {
+        data.centroid = [...v];
+      } else {
+        for (let i = 0; i < data.centroid.length; i++) {
+          data.centroid[i] = (data.centroid[i] * data.articleCount + v[i]) / (data.articleCount + 1);
+        }
+      }
+      data.articleCount++;
+    }
     const pubTime = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
     if (pubTime > data.latestPublishedAt) data.latestPublishedAt = pubTime;
   }
@@ -864,6 +891,8 @@ export function addArticleToClusterIndex(clusterId: string, title: string, descr
       fingerprint: new Set(),
       titleTokens: new Set(),
       representatives: [],
+      centroid: null,
+      articleCount: 0,
       latestPublishedAt: 0
     });
   }
@@ -879,6 +908,18 @@ export function addArticleToClusterIndex(clusterId: string, title: string, descr
   title.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/)
     .filter(w => w.length >= 4).forEach(w => data.titleTokens.add(w));
   if (data.representatives.length < 5) data.representatives.push({ title, embedding });
+  
+  if (embedding) {
+    if (!data.centroid) {
+      data.centroid = [...embedding];
+    } else {
+      for (let i = 0; i < data.centroid.length; i++) {
+        data.centroid[i] = (data.centroid[i] * data.articleCount + embedding[i]) / (data.articleCount + 1);
+      }
+    }
+  }
+  data.articleCount++;
+
   const pubTime = publishedAt ? (publishedAt instanceof Date ? publishedAt.getTime() : new Date(publishedAt).getTime()) : Date.now();
   if (pubTime > data.latestPublishedAt) data.latestPublishedAt = pubTime;
 
@@ -964,73 +1005,52 @@ function computeStoryMatchScore(
   return Math.min(1, composite);
 }
 
-export async function findCluster(art: ArticleToProcess & { embedding?: number[] | null }): Promise<string | null> {
-  const title = art.title;
-  const excerpt = art.description || "";
-  const words = extractKeywords(title);
-  const entities = extractEntities(title, excerpt);
-  const fingerprint = extractTopicFingerprint(title, excerpt);
+export async function findClusterViaPgVector(art: ArticleToProcess & { embedding?: number[] | null }): Promise<string | null> {
+  if (!art.embedding || !process.env.DATABASE_URL) return null;
+  const v1 = typeof art.embedding === 'string' ? JSON.parse(art.embedding as any) : art.embedding;
+  const results = await storage.findNearestClusters(v1, { limit: 3, minScore: 0.78, maxAgeHours: 48 });
+  
+  if (results.length > 0) {
+    return results[0].clusterId;
+  }
+  return null;
+}
 
+export async function findCluster(art: ArticleToProcess & { embedding?: number[] | null }): Promise<string | null> {
   await ensureClusterIndexFresh();
 
-  const SIMILARITY_THRESHOLD = 0.15; // Aggressively lowered to encourage broader clustering and rapid source accumulation
+  if (!art.embedding) return null;
+
+  if (process.env.DATABASE_URL) {
+    const id = await findClusterViaPgVector(art);
+    if (id) return id;
+  }
+
+  const v1 = typeof art.embedding === 'string' ? JSON.parse(art.embedding as any) : art.embedding;
+  const CLUSTERING_THRESHOLD = 0.78;
+  const MAX_CLUSTER_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
+
   let bestId: string | null = null;
   let bestScore = 0;
 
   for (const [clusterId, data] of clusterKeywordIndex) {
-    // Quick filtering: Must share at least 1 keyword, 1 entity, or 3 title words to consider scoring
-    const kwIntersect = Array.from(words).filter(w => data.keywords.has(w)).length;
-    const hasAnyEntityMatch =
-      Array.from(entities.persons).some(p => data.entities.persons.has(p)) ||
-      Array.from(entities.locations).some(l => data.entities.locations.has(l)) ||
-      Array.from(entities.organizations).some(o => data.entities.organizations.has(o));
+    if (!data.centroid) continue;
+    
+    // Only compare against active clusters from last ~48h
+    if (Date.now() - data.latestPublishedAt > MAX_CLUSTER_AGE_MS) continue;
 
-    // FIX: Add title word overlap as 3rd path to bypass the early-exit filter.
-    // This catches articles about the same story with different keyword framings.
-    let hasTitleWordOverlap = false;
-    if (data.titleTokens && data.titleTokens.size > 0) {
-      const artTitleWords = title.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter((w: string) => w.length >= 4);
-      const titleOverlap = artTitleWords.filter((w: string) => data.titleTokens.has(w)).length;
-      hasTitleWordOverlap = titleOverlap >= 2; // Relaxed from 3 to 2 for better match rates on short titles
-    }
-
-    if (kwIntersect < 1 && !hasAnyEntityMatch && !hasTitleWordOverlap) continue;
-
-    const score = computeStoryMatchScore(words, entities, fingerprint, title, data);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = clusterId;
-    }
-  }
-
-  // Final check: if bestScore is too low, we fallback to vector similarity if available
-  if (bestScore < SIMILARITY_THRESHOLD && art.embedding) {
-    for (const [clusterId, data] of clusterKeywordIndex) {
-      if (!data.representatives) continue;
-
-      let maxVecSim = 0;
-      for (const rep of data.representatives) {
-        if (!rep.embedding) continue;
-        const v1 = typeof art.embedding === 'string' ? JSON.parse(art.embedding as any) : art.embedding;
-        const v2 = typeof rep.embedding === 'string' ? JSON.parse(rep.embedding as any) : rep.embedding;
-
-        try {
-          const sim = calculateCosineSimilarity(v1, v2);
-          if (sim > maxVecSim) maxVecSim = sim;
-        } catch (e) { }
-      }
-
-      // 0.82 represents a safer broader topic match, preventing false positive merges
-      if (maxVecSim >= 0.82 && maxVecSim > bestScore) {
-        bestScore = maxVecSim;
+    try {
+      const cosSim = calculateCosineSimilarity(v1, data.centroid);
+      if (cosSim > bestScore) {
+        bestScore = cosSim;
         bestId = clusterId;
       }
+    } catch (e) {
+      // Ignore parse/dimension errors
     }
   }
 
-  // Uses SIMILARITY_THRESHOLD (0.15). If vector match succeeded, bestScore will be >= 0.75.
-  return bestScore >= SIMILARITY_THRESHOLD ? bestId : null;
+  return bestScore > CLUSTERING_THRESHOLD ? bestId : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1049,59 +1069,51 @@ export async function retroactivelyMergeToCluster(
   const clusterEntities = extractEntities(title, description);
   const clusterPubTime = new Date(publishedAt || Date.now()).getTime();
 
-  const candidates = await db.select({
-    id: articles.id,
-    title: articles.title,
-    excerpt: articles.excerpt,
-    clusterId: articles.clusterId,
-    sourceId: articles.sourceId,
-    publishedAt: articles.publishedAt,
-    url: articles.url,
-    sourceUrl: articles.sourceUrl,
-    embedding: sql<number[] | null>`ae.embedding`
-  })
-    .from(articles)
-    .leftJoin(sql`article_embeddings ae`, sql`ae.article_id = ${articles.id}`)
-    .where(and(eq(articles.status, "published"), sql`${articles.visibilityState} IN ('visible', 'low_priority')`))
-    .limit(1000);
+  let candidates: any[] = [];
+  
+  if (process.env.DATABASE_URL && embeddingBy) {
+    const v1 = typeof embeddingBy === 'string' ? JSON.parse(embeddingBy as any) : embeddingBy;
+    candidates = await storage.findSimilarArticles(v1, { limit: 50, threshold: 0.82 });
+  } else {
+    candidates = await db.select({
+      id: articles.id,
+      title: articles.title,
+      excerpt: articles.excerpt,
+      clusterId: articles.clusterId,
+      sourceId: articles.sourceId,
+      publishedAt: articles.publishedAt,
+      url: articles.url,
+      sourceUrl: articles.sourceUrl,
+      embedding: sql<number[] | null>`ae.embedding`
+    })
+      .from(articles)
+      .leftJoin(sql`article_embeddings ae`, sql`ae.article_id = ${articles.id}`)
+      .where(and(eq(articles.status, "published"), sql`${articles.visibilityState} IN ('visible', 'low_priority')`))
+      .limit(100);
+  }
 
   let mergedCount = 0;
   for (const candidate of candidates) {
     if (candidate.clusterId === clusterId) continue;
-    // Don't merge things from weeks ago
-    const candTime = candidate.publishedAt ? new Date(candidate.publishedAt).getTime() : 0;
-    if (Math.abs(clusterPubTime - candTime) > (168 * 60 * 60 * 1000)) continue;
+    
+    let isMatch = true;
+    
+    if (!process.env.DATABASE_URL) {
+      const candTime = candidate.publishedAt ? new Date(candidate.publishedAt).getTime() : 0;
+      if (Math.abs(clusterPubTime - candTime) > (168 * 60 * 60 * 1000)) continue;
 
-    const candKeywords = extractKeywords(candidate.title);
-    const candEntities = extractEntities(candidate.title, candidate.excerpt || "");
+      const shingleSim = calculateShingleSimilarity(title, candidate.title);
+      isMatch = shingleSim >= 0.80;
 
-    const entityScore = calculateWeightedEntitySimilarity(clusterEntities, candEntities);
-
-    const kwIntersect = Array.from(clusterKeywords).filter(w => candKeywords.has(w)).length;
-    const kwUnion = new Set([...clusterKeywords, ...candKeywords]).size;
-    const kwScore = kwUnion > 0 ? kwIntersect / kwUnion : 0;
-
-    const fingerA = extractTopicFingerprint(title, description);
-    const fingerB = extractTopicFingerprint(candidate.title, candidate.excerpt || "");
-    const fpIntersect = Array.from(fingerA).filter(w => fingerB.has(w)).length;
-    const fpUnion = new Set([...fingerA, ...fingerB]).size;
-    const fpScore = fpUnion > 0 ? fpIntersect / fpUnion : 0;
-
-    const shingleSim = calculateShingleSimilarity(title, candidate.title);
-
-    // Advanced composite (Recalibrated for aggressive retroactive merges)
-    const composite = (entityScore * 0.35) + (kwScore * 0.25) + (fpScore * 0.25) + (shingleSim * 0.20);
-
-    let isMatch = composite >= 0.18 || shingleSim >= 0.80;
-
-    if (!isMatch && embeddingBy && candidate.embedding) {
-      try {
-        const v2 = typeof candidate.embedding === 'string'
-          ? JSON.parse(candidate.embedding as any)
-          : candidate.embedding;
-        const cosSim = calculateCosineSimilarity(embeddingBy, v2 as number[]);
-        if (cosSim >= 0.82) isMatch = true;
-      } catch (e) { }
+      if (!isMatch && embeddingBy && candidate.embedding) {
+        try {
+          const v2 = typeof candidate.embedding === 'string'
+            ? JSON.parse(candidate.embedding as any)
+            : candidate.embedding;
+          const cosSim = calculateCosineSimilarity(embeddingBy, v2 as number[]);
+          if (cosSim >= 0.82) isMatch = true;
+        } catch (e) { }
+      }
     }
 
     if (isMatch) {
@@ -1169,7 +1181,9 @@ async function scheduleContentEnrichment(articleId: string, url: string, cluster
     let traceUpdate: Record<string, any> = { ...currentTrace, status: "failed", enriched_at: new Date().toISOString() };
     await storage.updateArticle(articleId, { trace: traceUpdate });
 
-    const scraped = await fetchFullContent(url);
+    const scraped = await timed("Extraction", async () => {
+      return await fetchFullContent(url);
+    });
     if (scraped) {
       traceUpdate.status = "enriched";
       traceUpdate.word_count = scraped.wordCount;
@@ -1277,7 +1291,9 @@ export async function processArticle(
   if (correctionKeywords.test(art.title)) {
     // Try to find related cluster to flag
     const artEmbeddingForCorrection = generateEmbedding(`${art.title} ${art.description || ""}`);
-    const relatedCluster = await findCluster({ ...art, embedding: artEmbeddingForCorrection });
+    const relatedCluster = await timed("Cluster", async () => {
+      return await findCluster({ ...art, embedding: artEmbeddingForCorrection });
+    });
     if (relatedCluster) {
       await storage.updateCluster(relatedCluster, {
         hasCorrection: true,
@@ -1339,7 +1355,9 @@ export async function processArticle(
   } else {
     try {
       const { getEmbedding } = await import("./lib/embeddings-client");
-      articleEmbedding = await getEmbedding(`${art.title} ${art.description || ""}`);
+      articleEmbedding = await timed("Embedding", async () => {
+        return await getEmbedding(`${art.title} ${art.description || ""}`);
+      });
       if (articleEmbedding) {
         art.embedding = articleEmbedding;
       }
@@ -1351,7 +1369,9 @@ export async function processArticle(
   // Fallback to local sparse hash if Jina failed or is rate-limited
   const finalEmbedding = articleEmbedding || generateEmbedding(`${art.title} ${art.description || ""}`);
 
-  const clusterId = await findCluster({ ...art, embedding: finalEmbedding });
+  const clusterId = await timed("Cluster", async () => {
+    return await findCluster({ ...art, embedding: finalEmbedding });
+  });
   // articleId and duplicate check already done at top of function
   const trace: Record<string, any> = art.trace || { fetched: new Date().toISOString() };
 
@@ -1386,13 +1406,16 @@ export async function processArticle(
       headline: art.title,
       summary: art.description || "",
       sourceCount: 1,
-      // --- Editorial Intelligence 2.0: Track Origin ---
       originPublisherId: publisher.id,
       originPublishedAt: art.publishedAt ? new Date(art.publishedAt) : new Date(),
     });
     finalClusterId = newCluster.id;
     trace.clustered_new = new Date().toISOString();
     recordClusterEvent({ type: "new", clusterId: newCluster.id, title: art.title });
+    
+    if (articleEmbedding) {
+      await storage.upsertClusterCentroid(newCluster.id, articleEmbedding, 1);
+    }
 
     const { retroactiveMergeQueue } = await import("./queue");
     retroactiveMergeQueue.add("merge", {
@@ -1406,6 +1429,10 @@ export async function processArticle(
   } else {
     console.log(`🔗 [CLUSTER] Cluster matched: ${art.title}`);
     trace.clustered_existing = new Date().toISOString();
+    
+    if (articleEmbedding) {
+      await storage.upsertClusterCentroid(finalClusterId, articleEmbedding, 1);
+    }
   }
 
   const quality = scoreArticle({ title: art.title, description: art.description, excerpt: excerpt, publishedAt: art.publishedAt }, {
@@ -1424,30 +1451,52 @@ export async function processArticle(
   // Derive numeric biasScore from publisher's bias label so every article has real data
   const biasScore = biasLabelToScore(pubInfo.bias);
 
+  // Extract Named Entities (People, Places, Organizations)
+  let extractedEntities: string[] = [];
+  try {
+    const doc = nlp(fullContent || excerpt || art.title || "");
+    const people = doc.people().out('array');
+    const places = doc.places().out('array');
+    const orgs = doc.organizations().out('array');
+    
+    // Clean and deduplicate entities
+    extractedEntities = Array.from(new Set(
+      [...people, ...places, ...orgs]
+        .map(e => e.trim().replace(/^['"]|['"]$/g, '')) // Remove trailing quotes
+        .filter(e => e.length > 2)
+    ));
+    trace.entities_extracted = extractedEntities.length;
+  } catch (err) {
+    console.warn("[NLP] Entity extraction failed:", err);
+  }
+
   let created;
   try {
-    created = await storage.createArticle({
-      id: articleId,
-      sourceId: publisher.id,
-      clusterId: finalClusterId,
-      title: art.title,
-      slug: articleSlug,
-      excerpt: excerpt,
-      bodyClean: excerpt,
-      bodyHtml: fullContent,
-      fullContent: fullContent,
-      heroImageUrl: heroImage,
-      url: art.url,
-      sourceUrl: art.url,
-      domain: pubInfo.domain,
-      trace: trace,
-      status: "published",
-      visibilityState: visibility,
-      qualityScore: qualityScore,
-      importanceScore: 0,
-      biasScore: biasScore,
-      publishedAt: art.publishedAt ? new Date(art.publishedAt) : new Date(),
-    }, [], []);  // categoryIds and tagIds resolved by the fetcher after creation
+    created = await timed("Persist", async () => {
+      return await storage.createArticle({
+        id: articleId,
+        sourceId: publisher.id,
+        clusterId: finalClusterId,
+        title: art.title,
+        slug: articleSlug,
+        excerpt: excerpt,
+        bodyClean: excerpt,
+        bodyHtml: fullContent,
+        fullContent: fullContent,
+        heroImageUrl: heroImage,
+        url: art.url,
+        sourceUrl: art.url,
+        domain: pubInfo.domain,
+        trace: trace,
+        status: "published",
+        visibilityState: visibility,
+        qualityScore: qualityScore,
+        importanceScore: 0,
+        biasScore: biasScore,
+        entities: extractedEntities,
+        publishedAt: art.publishedAt ? new Date(art.publishedAt) : new Date(),
+      }, [], []);  // categoryIds and tagIds resolved by the fetcher after creation
+    });
   } catch (err: any) {
     if (err.code === '23505') return null; // duplicate article — skip silently
     throw err;
@@ -1481,9 +1530,9 @@ export async function generateSmartSummary(clusterId: string) {
   const currentCount = articlesInGroup.length;
   const lastCount = (existingCluster as any)?.sourceCount || 0;
 
-  const lastSummary = (existingCluster as any)?.summaryUpdatedAt || (existingCluster as any)?.updatedAt;
+  const lastSummary = existingCluster?.aiEnrichedAt;
 
-  if (existingCluster?.summary) {
+  if (existingCluster?.summary && existingCluster?.aiEnrichedAt) {
     const sourceGrowth = lastCount > 0 ? currentCount / lastCount : currentCount;
     if (sourceGrowth < 1.5 && currentCount < 15) {
       console.log(`[Summary] Cluster ${clusterId} still small/stable (${currentCount} sources) — skipping re-summary`);
@@ -1503,7 +1552,9 @@ export async function generateSmartSummary(clusterId: string) {
   // Try to generate AI summary using Groq
   try {
     const { summarizeClusterWithGroq } = await import("./lib/groq-summarizer");
-    const aiSummaryResult = await summarizeClusterWithGroq(articlesInGroup);
+    const aiSummaryResult = await timed("Summarize", async () => {
+      return await summarizeClusterWithGroq(articlesInGroup);
+    });
     if (aiSummaryResult) {
       await storage.updateCluster(clusterId, {
         summary: aiSummaryResult.summary,
@@ -1631,6 +1682,9 @@ export async function updateClusterImportance(clusterId: string) {
 
   console.log(`[Importance] ${clusterId.substring(0, 8)}: score=${importanceScore} phase=${importanceData.phase}`);
 
+  // Run country-conditional bias scoring
+  scoreStory(clusterId, existingCluster, articlesInGroup).catch(e => console.error("[ScoreStory] Error:", e));
+
   // Invalidate homepage cache AFTER DB is updated to prevent race conditions
   import("./cache").then(({ cache: c }) =>
     c.delete("homepage_clusters_final").catch(() => { })
@@ -1638,6 +1692,51 @@ export async function updateClusterImportance(clusterId: string) {
   import("./queue").then(({ connection }) =>
     connection.del("homepage:v1").catch(() => { })
   ).catch(() => { });
+}
+
+// ─── COUNTRY-CONDITIONAL SCORING ─────────────────────────────────────────────
+
+async function scoreStoryForMarket(clusterId: string, countryCode: string, sources: any[]) {
+  try {
+    const profile = getCountryProfile(countryCode);
+    const scorer = SCORER_REGISTRY[profile.scorerStrategyId];
+    if (!scorer) return;
+
+    const mappedSources = sources.map(a => ({
+      id: a.id,
+      url: a.url,
+      publisherId: a.sourceId,
+      publisherName: a.publisher?.name,
+      biasRating: a.publisher?.biasRating
+    }));
+
+    const result = await scorer({ storyId: clusterId, sources: mappedSources });
+
+    // Upsert the score
+    const existing = await db.select().from(clusterScores).where(and(eq(clusterScores.clusterId, clusterId), eq(clusterScores.countryCode, countryCode))).limit(1);
+    
+    if (existing.length > 0) {
+      await db.update(clusterScores)
+        .set({ scoreData: result.scores as any, biasModel: result.biasModel })
+        .where(eq(clusterScores.id, existing[0].id));
+    } else {
+      await db.insert(clusterScores).values({
+        clusterId,
+        countryCode,
+        biasModel: result.biasModel,
+        scoreData: result.scores as any
+      });
+    }
+  } catch (e) {
+    console.error(`[ScoreStoryForMarket] Failed for ${clusterId} market ${countryCode}:`, e);
+  }
+}
+
+async function scoreStory(clusterId: string, clusterRecord: any, articlesInGroup: any[]) {
+  if (!clusterRecord) return;
+  // Hardcode all 3 markets for the beta Multi-Lens feature
+  const markets = ["US", "UK", "IN"];
+  await Promise.all(markets.map(cc => scoreStoryForMarket(clusterId, cc as string, articlesInGroup)));
 }
 
 // ─── NARRATIVE DRIFT DETECTOR ────────────────────────────────────────────────
@@ -1772,6 +1871,12 @@ export async function computeTrendingScore(clusterId: string): Promise<number> {
 export async function computeBlindspotScore(clusterId: string): Promise<number> {
   const cluster = await storage.getCluster(clusterId);
   if (!cluster || cluster.sourceCount < 3) return 0;
+
+  // AGE GATE: Prevent false alarms on breaking news that hasn't had time to propagate
+  const now = Date.now();
+  const firstSeen = cluster.firstSeenAt ? new Date(cluster.firstSeenAt).getTime() : now;
+  const ageHours = (now - firstSeen) / (1000 * 60 * 60);
+  if (ageHours < 6) return 0;
 
   const counts = [
     { name: "pro_establishment", count: cluster.proEstablishmentCount },
@@ -2349,9 +2454,14 @@ export async function runPublisherHealthManager() {
 export async function updateHomepageCache() {
   console.log("[DiversityGuard] Refreshing materialised homepage cache...");
   try {
-    // 1. Fetch top clusters by importance — Bypass Redis cache to get freshest data
     const { cache } = await import("./cache");
     const topClusters = await storage.getHomepageClusters(200);
+
+    // Pre-warm individual category caches
+    const categories = ["politics", "world", "technology", "business", "health", "science", "sports", "entertainment"];
+    for (const cat of categories) {
+      await storage.getHomepageClusters(50, 0, undefined, cat);
+    }
 
     // 2. Greedy Allocation (Diversity Guard)
     const selectedClusters: any[] = [];

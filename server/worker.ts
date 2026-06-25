@@ -120,7 +120,6 @@ setInterval(async () => {
       await Promise.all(chunk.map(async (id) => {
         await updateClusterImportance(id);
         await updateClusterVelocity(id);
-        await generateSmartSummary(id);
       }));
       await new Promise(r => setTimeout(r, 100));
     }
@@ -130,3 +129,13 @@ setInterval(async () => {
 }, 60_000);
 
 export { articleWorker, heavyTaskWorker, retroactiveMergeWorker };
+
+import { runPipelineScheduler } from "./pipeline-scheduler";
+(async () => {
+  try {
+    await runPipelineScheduler();
+    console.log("[Worker] Pipeline Scheduler initialized completely inside Worker Process.");
+  } catch (err) {
+    console.error("[Worker] Failed to start pipeline scheduler:", err);
+  }
+})();

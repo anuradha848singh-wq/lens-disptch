@@ -17,7 +17,7 @@ services:
     plan: starter
     region: ohio
     buildCommand: npm install && npm run build
-    startCommand: npm run start
+    startCommand: npx drizzle-kit push && npm run start
     envVars:
       - key: DATABASE_URL
         fromDatabase:
