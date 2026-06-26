@@ -15,6 +15,8 @@ import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { PublisherLogo } from "./PublisherLogo";
 import { motion } from "framer-motion";
+import { InsightCaption } from "./InsightCaption";
+import { SharePanel } from "./SharePanel";
 
 function proxyImage(url: string | null | undefined, width = 400): string | null {
   if (!url) return null;
@@ -24,9 +26,9 @@ function proxyImage(url: string | null | undefined, width = 400): string | null 
 
 function getBias(article: ArticleWithDetails & { proEstablishmentCount?: number; neutralCount?: number; proOppositionCount?: number; totalSources?: number }) {
   // Use real cluster bias counts from the API when available
-  const l = article.proEstablishmentCount ?? 0;
+  const l = article.proOppositionCount ?? 0;
   const c = article.neutralCount ?? 0;
-  const r = article.proOppositionCount ?? 0;
+  const r = article.proEstablishmentCount ?? 0;
   const total = l + c + r;
 
   if (total > 0) {
@@ -59,9 +61,9 @@ function calculateDiversity(article: any): number {
   if (article.shannonDiversity !== undefined && article.shannonDiversity > 0) {
     return article.shannonDiversity;
   }
-  const l = article.proEstablishmentCount || 0;
+  const l = article.proOppositionCount || 0;
   const c = article.neutralCount || 0;
-  const r = article.proOppositionCount || 0;
+  const r = article.proEstablishmentCount || 0;
   const total = l + c + r;
   if (total <= 1) return 0;
 
@@ -83,9 +85,9 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
   const sources = getSourceCount(article);
   const diversityScore = calculateDiversity(article);
   const derivedDiversity = React.useMemo(() => {
-    const l = article.proEstablishmentCount   ?? 0;
+    const l = article.proOppositionCount   ?? 0;
     const c = article.neutralCount ?? 0;
-    const r = article.proOppositionCount  ?? 0;
+    const r = article.proEstablishmentCount  ?? 0;
     const total = l + c + r;
     if (total === 0) return 0;
     const shannon = [l/total, c/total, r/total]
@@ -439,8 +441,8 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
     const cat = article.categories?.[0]?.slug || "general";
     // Bias spectrum percentages for this cluster
     const rowTotal = (article.proEstablishmentCount || 0) + (article.neutralCount || 0) + (article.proOppositionCount || 0);
-    const rowLeftPct   = rowTotal > 0 ? Math.round(((article.proEstablishmentCount   || 0) / rowTotal) * 100) : 0;
-    const rowRightPct  = rowTotal > 0 ? Math.round(((article.proOppositionCount  || 0) / rowTotal) * 100) : 0;
+    const rowLeftPct   = rowTotal > 0 ? Math.round(((article.proOppositionCount   || 0) / rowTotal) * 100) : 0;
+    const rowRightPct  = rowTotal > 0 ? Math.round(((article.proEstablishmentCount  || 0) / rowTotal) * 100) : 0;
     const rowCenterPct = 100 - rowLeftPct - rowRightPct;
     // Mockup specific category coloring
     const categoryColors = {
@@ -558,9 +560,9 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
              </span>
              
              <div className="h-1.5 w-full bg-secondary/30 rounded-full overflow-hidden flex">
-                <div className="bg-blue-600 h-full" style={{ width: `${Math.round((article.proEstablishmentCount || 0) / (sources || 1) * 100)}%` }} />
+                <div className="bg-blue-600 h-full" style={{ width: `${Math.round((article.proOppositionCount || 0) / (sources || 1) * 100)}%` }} />
                 <div className="bg-slate-400 h-full" style={{ width: `${Math.round((article.neutralCount || 0) / (sources || 1) * 100)}%` }} />
-                <div className="bg-red-600 h-full" style={{ width: `${Math.round((article.proOppositionCount || 0) / (sources || 1) * 100)}%` }} />
+                <div className="bg-red-600 h-full" style={{ width: `${Math.round((article.proEstablishmentCount || 0) / (sources || 1) * 100)}%` }} />
              </div>
              
              <span className="text-[10px] font-bold text-foreground/70 uppercase whitespace-nowrap">
@@ -591,9 +593,10 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
         isDiversityPick ? "border-purple-500/50 dark:border-purple-400/50 ring-1 ring-purple-500/20" : "border-border/50"
       )}
       onClick={() => setLocation(`/article/${article.id}`)}
-      initial={{ opacity: 0, y: 10 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
+      variants={{
+        hidden: { opacity: 0, y: 12 },
+        show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: "easeOut" } }
+      }}
     >
       {isDiversityPick && (
         <div className="absolute top-0 right-0 z-10 bg-purple-500 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-bl-lg shadow-sm">
@@ -639,9 +642,16 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
         </div>
 
         {/* Title */}
-        <h3 className="font-serif text-[17px] font-black leading-tight group-hover:text-primary transition-colors line-clamp-3 mb-4" style={{ minHeight: "4.5rem" }}>
+        <h3 className="font-serif text-[20px] font-black leading-tight group-hover:text-primary transition-colors mb-2">
           {article.title}
         </h3>
+
+        {/* Excerpt */}
+        {article.excerpt && (
+          <p className="font-serif text-[15px] leading-relaxed text-muted-foreground/90 line-clamp-4 mb-4">
+            {article.excerpt}
+          </p>
+        )}
 
         {derivedDiversity > 0 || diversityScore > 0 ? (
           <div className="mt-2 space-y-1 mb-3">
@@ -653,7 +663,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
               {(() => {
                 const total = (article.proEstablishmentCount || 0) + (article.neutralCount || 0) + (article.proOppositionCount || 0);
                 if (total === 0) return null;
-                const lPct = Math.round(((article.proEstablishmentCount || 0) / total) * 100);
+                const lPct = Math.round(((article.proOppositionCount || 0) / total) * 100);
                 const cPct = Math.round(((article.neutralCount || 0) / total) * 100);
                 const rPct = 100 - lPct - cPct;
                 return (
@@ -666,10 +676,18 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
               })()}
             </div>
             <div className="flex justify-between text-[9px] font-bold">
-              <span className="bias-left-text">{article.proEstablishmentCount || 0}L</span>
+              <span className="bias-left-text">{article.proOppositionCount || 0}L</span>
               <span className="text-muted-foreground">{article.neutralCount || 0}C</span>
-              <span className="bias-right-text">{article.proOppositionCount || 0}R</span>
+              <span className="bias-right-text">{article.proEstablishmentCount || 0}R</span>
             </div>
+            <InsightCaption
+              proEstablishmentCount={article.proEstablishmentCount || 0}
+              proOppositionCount={article.proOppositionCount || 0}
+              regionalAlignedCount={(article as any).regionalAlignedCount || 0}
+              neutralCount={article.neutralCount || 0}
+              totalSources={sources}
+              className="mt-1"
+            />
           </div>
         ) : (
           <div className="h-1 w-full bg-secondary/30 rounded-full overflow-hidden flex mt-2 mb-3">
@@ -679,9 +697,11 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
 
         <div className="mt-auto flex items-center justify-between pt-1 border-t border-border/20">
            <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">{sources} {sources === 1 ? 'Perspective' : 'Perspectives'}</span>
-           {/* Bookmark Icon */}
-           <div className="text-muted-foreground/40 hover:text-primary transition-colors p-1">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+           {/* Share + Bookmark row */}
+           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+             <div onClick={(e) => e.stopPropagation()}>
+               <SharePanel articleId={article.id} title={article.title} className="" />
+             </div>
            </div>
         </div>
       </div>

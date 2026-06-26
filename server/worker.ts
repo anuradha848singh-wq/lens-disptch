@@ -1,4 +1,5 @@
 import { Worker, Job } from "bullmq";
+import * as os from "os";
 import { connection } from "./queue";
 import { processArticle, generateSmartSummary, ArticleToProcess, retroactivelyMergeToCluster } from "./processing";
 import { storage } from "./storage";
@@ -37,7 +38,7 @@ const articleWorker = new Worker("article-processing", async (job: Job) => {
     recordWorkerJob({ jobId: job.id!, title: article.title || "", status: isDuplicate ? "duplicate" : "failed", errorMessage: errMsg, durationMs: Date.now() - workerStart });
     if (!isDuplicate) throw err;
   }
-}, { connection: connection as any, concurrency: 8 });
+}, { connection: connection as any, concurrency: Math.min(os.cpus().length, 8) });
 
 // 2. Heavy Tasks Worker (Clustering, Summaries)
 const heavyTaskWorker = new Worker("heavy-tasks", async (job: Job) => {
@@ -56,7 +57,7 @@ const retroactiveMergeWorker = new Worker("retroactive-merge", async (job: Job) 
   const { clusterId, title, description, embedding, publishedAt } = job.data;
   console.log(`[Worker] Running background retroactive merge for cluster ${clusterId}`);
   await retroactivelyMergeToCluster(clusterId, title, description, embedding, publishedAt);
-}, { connection: connection as any, concurrency: 1 });
+}, { connection: connection as any, concurrency: 2 });
 
 retroactiveMergeWorker.on("error", (err) => {
   if ((err as any).code !== "ECONNREFUSED") {
@@ -120,6 +121,7 @@ setInterval(async () => {
       await Promise.all(chunk.map(async (id) => {
         await updateClusterImportance(id);
         await updateClusterVelocity(id);
+        await generateSmartSummary(id);
       }));
       await new Promise(r => setTimeout(r, 100));
     }

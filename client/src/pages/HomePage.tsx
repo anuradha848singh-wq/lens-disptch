@@ -1,5 +1,5 @@
-﻿import { useState, useMemo, useEffect } from "react";
-import { useLocation } from "wouter";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { useLocation, Link } from "wouter";
 import { motion } from "framer-motion";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -13,14 +13,16 @@ import { type ArticleWithDetails, type Category } from "@shared/schema";
 import { useAuth } from "@/lib/auth-context";
 import { EditorialHero } from "@/components/EditorialHero";
 import { BlindspotFeed } from "@/components/BlindspotFeed";
-import { BiasSpectrumStrip } from "@/components/BiasSpectrumStrip";
-import { ReadingHabitWidget, CoverageStatsWidget, PolarizingWidget, TrendingTopicsWidget } from "@/components/SidebarWidgets";
+import { LatestUpdatesWidget, PolarizingWidget, TrendingTopicsWidget } from "@/components/SidebarWidgets";
 import { TopicHeatCalendar } from "@/components/TopicHeatCalendar";
 import { DailyBriefingSidebar } from "@/components/DailyBriefingSidebar";
 import { Filter, ChevronRight } from "lucide-react";
 import { CategoryStrip } from "@/components/CategoryStrip";
 import { SectionErrorBoundary } from "@/components/SectionErrorBoundary";
 import { StoryCardErrorBoundary } from "@/components/StoryCardErrorBoundary";
+import { AuthModal } from "@/components/AuthModal";
+import { useCountryProfile } from "@/hooks/useCountryProfile";
+import { useUrlState } from "@/hooks/useUrlState";
 
 type ArticleWithMetadata = ArticleWithDetails & {
   category?: string;
@@ -29,28 +31,37 @@ type ArticleWithMetadata = ArticleWithDetails & {
   proOppositionCount?: number;
 };
 
+
 function SkeletonCard() {
   return (
-    <div className="bg-white border border-border p-4 space-y-3 animate-pulse">
-      <Skeleton className="aspect-video w-full rounded-sm" />
-      <Skeleton className="h-4 w-24" />
-      <Skeleton className="h-6 w-full" />
-      <Skeleton className="h-6 w-4/5" />
-      <div className="flex gap-2">
-        <Skeleton className="h-3 w-16" />
-        <Skeleton className="h-3 w-16" />
+    <div className="glass-card overflow-hidden">
+      <div className="aspect-[16/10] bg-muted animate-shimmer" />
+      <div className="p-4 space-y-2">
+        <div className="h-3 bg-muted rounded animate-shimmer w-1/3" />
+        <div className="h-5 bg-muted rounded animate-shimmer" />
+        <div className="h-5 bg-muted rounded animate-shimmer w-4/5" />
+        <div className="flex gap-2 pt-1">
+          <div className="h-3 bg-muted rounded animate-shimmer w-16" />
+          <div className="h-3 bg-muted rounded animate-shimmer w-12" />
+        </div>
       </div>
     </div>
   );
 }
 
+
 export default function HomePage() {
   const { user } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  // ── URL-synced state (survives F5 and browser history) ──────────────────
+  const urlState = useUrlState();
+  const selectedCategoryId = urlState.categoryId;
+  const searchQuery = urlState.search;
+
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [indexLimit, setIndexLimit] = useState(8);
   const [indexTab, setIndexTab] = useState("all");
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const { countryCode, setCountryCode } = useCountryProfile();
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -58,6 +69,7 @@ export default function HomePage() {
 
   const [location] = useLocation();
   const isForYou = location === "/for-you";
+
 
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ["/api/categories"],
@@ -71,12 +83,12 @@ export default function HomePage() {
   }, [selectedCategoryId, categories]);
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: [isForYou ? "/api/articles/for-you" : "/api/homepage", searchQuery, selectedCategorySlug],
+    queryKey: [isForYou ? "/api/articles/for-you" : "/api/homepage", searchQuery, selectedCategorySlug, countryCode],
     queryFn: ({ pageParam = 0 }) => 
       isForYou 
-        ? api.articles.forYou(20, pageParam) 
-        : api.articles.homepage(20, pageParam, searchQuery, selectedCategorySlug),
-    getNextPageParam: (lastPage, allPages) => lastPage.length === 20 ? allPages.length * 20 : undefined,
+        ? api.articles.forYou(40, pageParam) 
+        : api.articles.homepage(40, pageParam, searchQuery, selectedCategorySlug, countryCode),
+    getNextPageParam: (lastPage, allPages) => lastPage.length === 40 ? allPages.length * 40 : undefined,
     initialPageParam: 0,
     staleTime: 30000, // 30s cache to prevent huge re-fetches
     refetchInterval: 90000, // 90s visible-tab polling
@@ -94,7 +106,7 @@ export default function HomePage() {
       setLastFirstArticleId(currentFirstArticleId);
     } else if (currentFirstArticleId && lastFirstArticleId && currentFirstArticleId !== lastFirstArticleId) {
       toast({
-        title: "ΓÜí Breaking News Updates",
+        title: "⚡ Breaking News Updates",
         description: "New stories have just been aggregated. Click to refresh the feed.",
         duration: 8000,
         onClick: () => {
@@ -108,8 +120,11 @@ export default function HomePage() {
   }, [currentFirstArticleId, lastFirstArticleId, queryClient, toast]);
 
 
-  const heroArticles = useMemo(() => allArticles.slice(0, 4), [allArticles]);
+  const heroArticles = useMemo(() => allArticles.slice(0, 8), [allArticles]);
   const blindspotArticles = useMemo(() => allArticles, [allArticles]);
+  // Memoized slice for sidebar — avoids re-slicing on every parent render
+  const briefingSidebarArticles = useMemo(() => allArticles.slice(0, 9), [allArticles]);
+
 
   const groupedArticlesByCategory = useMemo(() => {
     const map = new Map<string, ArticleWithMetadata[]>();
@@ -132,51 +147,82 @@ export default function HomePage() {
         a.title.toLowerCase().includes(q) ||
         (a.categories || []).some((c: any) => c.name.toLowerCase().includes(q))
       );
-      return filtered.slice(0, 12);
+      return filtered.slice(0, 18);
     }
 
-    // Priority 2: Category ID ΓÇö filter by pre-grouped map lookup
+    // Priority 2: Category ID — filter by pre-grouped map lookup
     if (selectedCategoryId) {
       const preFiltered = groupedArticlesByCategory.get(selectedCategoryId);
       if (preFiltered && preFiltered.length >= 3) {
-        return preFiltered.slice(0, 12);
+        return preFiltered.slice(0, 36);
       }
     }
 
-    // Default: latest 12 articles
-    return allArticles.slice(0, 12);
+    // Default: latest 36 articles
+    return allArticles.slice(0, 36);
   }, [allArticles, selectedCategoryId, selectedTopic, groupedArticlesByCategory]);
 
   const indexArticles = useMemo(() => {
     // Show a different slice for the index at the bottom
-    let subset = allArticles.slice(12, 28);
+    let subset = allArticles.slice(24, 40);
     if (indexTab !== "all") {
       subset = subset.filter(a => (a.categories || []).some((c: any) => c.slug === indexTab || c.name.toLowerCase() === indexTab));
     }
     return subset;
   }, [allArticles, indexTab]);
 
+  const uniquePerspectivesCount = useMemo(() => {
+    return new Set(categoryArticles.map(a => a.sourceId)).size;
+  }, [categoryArticles]);
+
+  if (isForYou && !user) {
+    return (
+      <div className="min-h-screen bg-background">
+        <BreakingTicker />
+        <MainNav onSearch={urlState.setSearch} />
+        <div className="max-w-[1400px] mx-auto px-4 py-24 text-center">
+          <div className="max-w-2xl mx-auto glass-card p-12 shadow-sm animate-fade-in-up">
+            <div className="text-6xl mb-6">✨</div>
+            <h2 className="text-3xl font-display font-black mb-4">Unlock Your Personalised Feed</h2>
+            <p className="text-muted-foreground text-lg leading-relaxed mb-8 max-w-lg mx-auto">
+              Sign in to discover stories tailored to your reading habits, uncover your political blindspots, and break out of the echo chamber.
+            </p>
+            <button
+              onClick={() => setIsAuthOpen(true)}
+              className="inline-block px-8 py-4 bg-accent-editorial text-white text-sm font-black uppercase tracking-widest hover:opacity-90 transition-opacity rounded-full shadow-lg"
+            >
+              Sign In / Create Account
+            </button>
+          </div>
+        </div>
+        <NewsFooter />
+        <AuthModal open={isAuthOpen} onOpenChange={setIsAuthOpen} />
+      </div>
+    );
+  }
+
+
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#F8F6F1]">
+      <div className="min-h-screen bg-background">
         <BreakingTicker />
-        <MainNav onSearch={setSearchQuery} />
-        <CategoryStrip selectedCategoryId={null} onSelect={() => {}} onSearch={setSearchQuery} />
+        <MainNav onSearch={urlState.setSearch} />
+        <CategoryStrip selectedCategoryId={null} onSelect={() => {}} onSearch={urlState.setSearch} />
         <div className="max-w-[1400px] mx-auto px-4 py-8">
-          <div className="flex flex-col xl:grid xl:grid-cols-[220px_minmax(0,1fr)_320px] gap-6 xl:gap-10">
+          <div className="flex flex-col xl:grid xl:grid-cols-[240px_minmax(0,1fr)_300px] gap-6 xl:gap-8">
             <div className="hidden xl:block space-y-4">
-              {[1,2,3,4,5].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}
+              {[1,2,3,4,5].map(i => <div key={i} className="h-12 bg-muted animate-shimmer rounded" />)}
             </div>
             <div className="space-y-6">
-              <div className="h-[380px] bg-muted animate-pulse rounded" />
+              <div className="h-[460px] bg-muted animate-shimmer rounded-xl" />
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {[1,2,3,4,5,6].map(i => <SkeletonCard key={i} />)}
               </div>
             </div>
             <div className="space-y-4">
-              <div className="h-32 bg-muted animate-pulse rounded" />
-              <div className="h-24 bg-muted animate-pulse rounded" />
-              <div className="h-24 bg-muted animate-pulse rounded" />
+              <div className="h-32 bg-muted animate-shimmer rounded" />
+              <div className="h-24 bg-muted animate-shimmer rounded" />
+              <div className="h-24 bg-muted animate-shimmer rounded" />
             </div>
           </div>
         </div>
@@ -184,15 +230,16 @@ export default function HomePage() {
     );
   }
 
+
   if (!isLoading && allArticles.length === 0) {
     return (
-      <div className="min-h-screen bg-[#F8F6F1]">
+      <div className="min-h-screen bg-background">
         <BreakingTicker />
-        <MainNav onSearch={setSearchQuery} />
-        <CategoryStrip selectedCategoryId={null} onSelect={() => {}} onSearch={setSearchQuery} />
+        <MainNav onSearch={urlState.setSearch} />
+        <CategoryStrip selectedCategoryId={null} onSelect={() => {}} onSearch={urlState.setSearch} />
         <div className="max-w-[1400px] mx-auto px-4 py-24 text-center">
-          <div className="max-w-lg mx-auto">
-            <div className="text-6xl mb-6">≡ƒô░</div>
+          <div className="max-w-lg mx-auto animate-fade-in-up">
+            <div className="text-6xl mb-6">📰</div>
             <h2 className="text-2xl font-display font-black mb-3">The Newsroom is Warming Up</h2>
             <p className="text-muted-foreground text-sm leading-relaxed mb-6">
               No articles have been ingested yet. The pipeline fetches news every 15 minutes automatically.
@@ -200,9 +247,9 @@ export default function HomePage() {
               <code className="bg-secondary px-1 py-0.5 rounded text-xs font-mono">docker compose up -d</code>{" "}
               then run <code className="bg-secondary px-1 py-0.5 rounded text-xs font-mono">npm run dev</code>.
             </p>
-            <a href="/admin" className="inline-block px-6 py-2.5 bg-foreground text-background text-xs font-black uppercase tracking-widest hover:bg-accent-editorial transition-colors">
-              Open Admin Panel ΓåÆ
-            </a>
+            <Link href="/admin" className="inline-block px-6 py-2.5 bg-foreground text-background text-xs font-black uppercase tracking-widest hover:bg-accent-editorial transition-colors">
+              Manage Sources &amp; AI
+            </Link>
           </div>
         </div>
         <NewsFooter />
@@ -211,95 +258,88 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F8F6F1] text-foreground selection:bg-accent-editorial/20">
+    <div className="min-h-screen bg-background text-foreground selection:bg-accent-editorial/20">
       <BreakingTicker />
-      <MainNav onSearch={setSearchQuery} searchQuery={searchQuery} />
+      <MainNav onSearch={urlState.setSearch} searchQuery={searchQuery} />
       <CategoryStrip
         selectedCategoryId={selectedCategoryId}
         onSelect={(id, topic) => {
-          setSelectedCategoryId(id);
+          urlState.setCategoryId(id, null);
           setSelectedTopic(topic || null);
         }}
         onSearch={(q) => {
-          setSearchQuery(q);
+          urlState.setSearch(q);
           setSelectedTopic(null);
         }}
       />
 
-      <div className="max-w-[1400px] mx-auto px-4 py-6">
-        <div className="flex flex-col xl:grid xl:grid-cols-[260px_minmax(0,1fr)_320px] gap-6 xl:gap-10 items-start">
+
+      <div className="w-full max-w-[1800px] mx-auto px-2 md:px-4 py-4">
+        <div className="flex flex-col xl:grid xl:grid-cols-[200px_minmax(0,1fr)_280px] gap-4 xl:gap-6 items-start">
 
           {/* LEFT SIDEBAR (Daily Briefing) */}
           <aside className="hidden xl:block w-full sticky top-20">
             <SectionErrorBoundary fallbackMessage="Could not load Daily Briefing">
-              <DailyBriefingSidebar articles={allArticles.slice(0, 9)} />
+              <DailyBriefingSidebar articles={briefingSidebarArticles} />
             </SectionErrorBoundary>
           </aside>
 
+
           {/* MAIN COLUMN */}
-          <main className="min-w-0 w-full overflow-hidden flex flex-col gap-6">
+          <main className="min-w-0 w-full overflow-hidden flex flex-col gap-4">
 
             {isForYou && (
               <div className="self-start px-3 py-1 bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400 rounded-full text-xs font-black uppercase tracking-wider mb-2 animate-fade-in shadow-sm border border-red-200/50">
-                Γ£¿ Personalised for you
+                ✨ Personalised for you
               </div>
             )}
 
-            {/* Top Navigation Tabs */}
-            <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
-              <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide border-b border-border/40 pb-2 w-full xl:w-auto flex-1 px-1">
-                <button
-                  onClick={() => { setSelectedCategoryId(null); setSelectedTopic(null); }}
-                  className={`pb-3 text-[14px] font-bold transition-all whitespace-nowrap relative ${!selectedCategoryId && !selectedTopic ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  ALL
-                  {!selectedCategoryId && !selectedTopic && (
-                    <span className="absolute bottom-0 left-0 w-full h-[2px] bg-red-600 rounded-t-full" />
-                  )}
-                </button>
-                {(categories as Category[]).slice(0, 6).map(cat => (
-                  <button
-                    key={cat.id}
-                    onClick={() => { setSelectedCategoryId(cat.id); setSelectedTopic(null); }}
-                    className={`pb-3 text-[14px] font-bold transition-all whitespace-nowrap uppercase relative ${selectedCategoryId === cat.id ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                  >
-                    {cat.name}
-                    {selectedCategoryId === cat.id && (
-                      <span className="absolute bottom-0 left-0 w-full h-[2px] bg-red-600 rounded-t-full" />
-                    )}
-                  </button>
-                ))}
-                <button className="pb-3 text-[14px] font-bold text-muted-foreground hover:text-foreground whitespace-nowrap flex items-center gap-1 uppercase">
-                  OPINION
-                </button>
-                <button className="pb-3 text-[14px] font-bold text-muted-foreground hover:text-foreground whitespace-nowrap flex items-center gap-1 uppercase">
-                  MORE <ChevronRight className="w-3 h-3 rotate-90" />
-                </button>
-              </div>
-              
-              {/* 6 PERSPECTIVES Dropdown */}
-              <div className="shrink-0 flex items-center gap-4 px-4 py-2 rounded-md cursor-pointer hover:bg-secondary/50 transition-colors self-start xl:self-auto pb-4">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-600"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                <div className="text-[11px] font-black uppercase tracking-widest leading-none text-foreground flex items-center gap-2">
-                  6 Perspectives <ChevronRight className="w-3 h-3 text-foreground rotate-90" />
+            {/* Edition Banner — only show when a region is active */}
+            {countryCode && countryCode !== "GLOBAL" && countryCode !== "US" && (
+              <div className="flex items-center gap-3 px-4 py-2 bg-gradient-to-r from-accent-editorial/10 to-transparent border border-accent-editorial/20 rounded-lg mb-1 animate-fade-in">
+                <span className="text-lg leading-none">
+                  {countryCode === "UK" ? "🇬🇧" : countryCode === "IN" ? "🇮🇳" : countryCode === "AU" ? "🇦🇺" : countryCode === "CA" ? "🇨🇦" : countryCode === "DE" ? "🇩🇪" : countryCode === "FR" ? "🇫🇷" : countryCode === "JP" ? "🇯🇵" : "🌍"}
+                </span>
+                <div>
+                  <span className="text-[11px] font-black uppercase tracking-widest text-accent-editorial">
+                    {countryCode === "UK" ? "United Kingdom" : countryCode === "IN" ? "India" : countryCode === "AU" ? "Australia" : countryCode === "CA" ? "Canada" : countryCode === "DE" ? "Germany" : countryCode === "FR" ? "France" : countryCode === "JP" ? "Japan" : countryCode} Edition
+                  </span>
+                  <p className="text-[10px] text-muted-foreground">Showing news prioritised for this region</p>
                 </div>
+                <button
+                  onClick={() => setCountryCode("GLOBAL")}
+                  className="ml-auto text-[10px] font-bold text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  World →
+                </button>
               </div>
-            </div>
+            )}
 
             {/* Hero Zone */}
             <EditorialHero articles={heroArticles} />
 
-            {/* Bias Spectrum Strip */}
-            <BiasSpectrumStrip articles={allArticles} />
+
 
             {/* MAIN FEED SECTION */}
-            <section className="mt-4">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-6 pb-2 border-b border-border/40">
-                <div className="flex items-center gap-3 w-full">
+            <section className="mt-2">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-3 mb-4 pb-2 border-b border-border/40">
+                <div className="flex items-center gap-4 w-full">
                   <h2 className="text-[18px] font-sans font-bold tracking-tight shrink-0 uppercase">MAIN FEED</h2>
-                  <div className="flex items-center gap-1 cursor-pointer">
+                  <div className="flex items-center gap-1 cursor-pointer mr-2">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">LATEST</span>
                     <ChevronRight className="w-3 h-3 text-muted-foreground rotate-90" />
+                  </div>
+                  
+                  {/* Dynamic perspectives counter banner */}
+                  <div className="flex items-center gap-1.5 px-3 py-1 bg-secondary/80 rounded-full border border-border/40 hover:bg-secondary transition-all">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-600">
+                      <line x1="18" y1="20" x2="18" y2="10"></line>
+                      <line x1="12" y1="20" x2="12" y2="4"></line>
+                      <line x1="6" y1="20" x2="6" y2="14"></line>
+                    </svg>
+                    <span className="text-[10px] font-black uppercase tracking-[0.08em] text-foreground">
+                      {uniquePerspectivesCount} Perspectives
+                    </span>
                   </div>
                 </div>
                 <button className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground hover:text-foreground shrink-0 border border-border/50 px-3 py-1.5 rounded-sm">
@@ -307,23 +347,29 @@ export default function HomePage() {
                 </button>
               </div>
 
-              {/* Responsive Grid - 4 Columns */}
-              <motion.div
-                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
-                initial="hidden"
-                whileInView="show"
-                viewport={{ once: true }}
-                variants={{
-                  hidden: { opacity: 0 },
-                  show: { opacity: 1, transition: { staggerChildren: 0.1 } }
-                }}
+              {/* Feed Grid:
+                  - key changes on filter switch → re-runs stagger animation
+                  - initial/animate only fire on mount+key-change
+                  - Individual cards use viewport once=true so they don't re-animate on refetch
+              */}
+              <div
+                key={selectedCategoryId || selectedTopic || "all"}
+                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4"
               >
-                {categoryArticles.slice(0, 12).map((a, index) => (
+                {categoryArticles.slice(0, 36).map((a, index) => (
                   <StoryCardErrorBoundary key={a.id}>
-                    <StoryCard article={a} variant="standard" priority={index === 0} />
+                    <motion.div
+                      initial={{ opacity: 0, y: 12 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: "-40px" }}
+                      transition={{ duration: 0.25, delay: Math.min(index, 8) * 0.035, ease: "easeOut" }}
+                      style={{ willChange: "opacity, transform" }}
+                    >
+                      <StoryCard article={a} variant="standard" priority={index === 0} />
+                    </motion.div>
                   </StoryCardErrorBoundary>
                 ))}
-              </motion.div>
+              </div>
 
               {hasNextPage && (
                 <div className="mt-12 flex justify-center border-t border-border/40 pt-8">
@@ -338,24 +384,29 @@ export default function HomePage() {
               )}
             </section>
 
-            {/* News Index Section (from Image 1) - At the end of the line */}
-            <section className="mt-16 border-t-4 border-foreground pt-12">
-              <div className="flex items-center justify-between gap-4 mb-8">
+            {/* News Index Section */}
+            <section className="mt-8 border-t-4 border-foreground pt-8">
+              <div className="flex items-center justify-between gap-4 mb-6">
                 <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide pb-2">
                   <h2 className="text-2xl font-serif font-black tracking-tight shrink-0 uppercase mr-4">THE NEWS INDEX</h2>
                   <button onClick={() => setIndexTab('all')} className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === 'all' ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}>ALL</button>
-                  <button onClick={() => setIndexTab('general')} className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === 'general' ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}>GENERAL</button>
-                  <button onClick={() => setIndexTab('world')} className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === 'world' ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}>WORLD</button>
-                  <button onClick={() => setIndexTab('politics')} className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === 'politics' ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}>POLITICS</button>
-                  <button onClick={() => setIndexTab('business')} className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === 'business' ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}>BUSINESS</button>
+                  {(categories as Category[]).map(cat => (
+                    <button 
+                      key={cat.id} 
+                      onClick={() => setIndexTab(cat.slug || cat.name.toLowerCase())} 
+                      className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === (cat.slug || cat.name.toLowerCase()) ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
                 </div>
                 <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 border border-border rounded shadow-sm bg-white cursor-pointer hover:bg-secondary transition-colors">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-600"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-foreground">6 Perspectives</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-foreground">{uniquePerspectivesCount} Perspectives</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                  {indexArticles.map(a => (
                   <StoryCardErrorBoundary key={a.id}>
                     <StoryCard article={a} variant="news-index" />
@@ -387,16 +438,32 @@ export default function HomePage() {
           </main>
 
           {/* RIGHT SIDEBAR */}
-          <aside className="w-full xl:w-[320px] xl:min-w-[320px] space-y-6 flex flex-col shrink-0 sticky top-20">
+          <aside className="w-full xl:w-[280px] xl:min-w-[280px] space-y-4 flex flex-col shrink-0 sticky top-20">
             <SectionErrorBoundary fallbackMessage="Could not load Trending">
               <TrendingTopicsWidget articles={allArticles} />
             </SectionErrorBoundary>
-            <SectionErrorBoundary fallbackMessage="Could not load Reading Habits">
-              <ReadingHabitWidget />
+            <SectionErrorBoundary fallbackMessage="Could not load Latest Updates">
+              <LatestUpdatesWidget articles={allArticles} />
             </SectionErrorBoundary>
-            <SectionErrorBoundary fallbackMessage="Could not load Stats">
-              <CoverageStatsWidget articles={allArticles} />
-            </SectionErrorBoundary>
+
+            {/* Factuality CTA Card */}
+            <Link href="/factuality">
+              <div className="border border-border/60 rounded-xl p-4 hover:border-accent-editorial/40 hover:shadow-sm transition-all cursor-pointer bg-gradient-to-br from-secondary/20 to-transparent group">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-7 h-7 rounded-lg bg-accent-editorial/10 flex items-center justify-center">
+                    <span className="text-sm">⚖️</span>
+                  </div>
+                  <span className="text-[11px] font-black uppercase tracking-widest text-accent-editorial">Factuality Index</span>
+                </div>
+                <p className="text-[12px] text-muted-foreground leading-snug mb-3">
+                  See which publishers score highest for accuracy, corrections, and transparency.
+                </p>
+                <span className="text-[10px] font-black uppercase tracking-widest text-foreground group-hover:text-accent-editorial transition-colors">
+                  View Ratings →
+                </span>
+              </div>
+            </Link>
+
             <SectionErrorBoundary fallbackMessage="Could not load Polarizing Feed">
               <PolarizingWidget articles={allArticles} />
             </SectionErrorBoundary>

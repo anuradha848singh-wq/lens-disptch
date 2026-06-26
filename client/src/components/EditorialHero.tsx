@@ -82,7 +82,7 @@ export function EditorialHero({ articles, bookmarkedIds }: EditorialHeroProps) {
       className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6"
       initial="hidden"
       whileInView="show"
-      viewport={{ once: true }}
+      viewport={{ once: true, margin: "-80px" }}
       variants={{
         hidden: { opacity: 0 },
         show: { opacity: 1, transition: { staggerChildren: 0.12 } }

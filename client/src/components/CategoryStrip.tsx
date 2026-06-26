@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { type Category } from "@shared/schema";
+import { useCountryProfile } from "@/hooks/useCountryProfile";
 
 interface CategoryStripProps {
   selectedCategoryId: string | null;
@@ -33,8 +34,22 @@ const POPULAR_TOPICS = [
   { label: "Election 2026", tag: "Election2026" },
 ];
 
+const REGIONS = [
+  { code: "GLOBAL", label: "World",   flag: "🌍" },
+  { code: "US",     label: "US",      flag: "🇺🇸" },
+  { code: "UK",     label: "UK",      flag: "🇬🇧" },
+  { code: "IN",     label: "India",   flag: "🇮🇳" },
+  { code: "AU",     label: "Australia",flag: "🇦🇺" },
+  { code: "CA",     label: "Canada",  flag: "🇨🇦" },
+  { code: "DE",     label: "Germany", flag: "🇩🇪" },
+  { code: "FR",     label: "France",  flag: "🇫🇷" },
+  { code: "JP",     label: "Japan",   flag: "🇯🇵" },
+  { code: "SG",     label: "Singapore",flag: "🇸🇬" },
+];
+
 export function CategoryStrip({ selectedCategoryId, onSelect, onSearch }: CategoryStripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { countryCode, setCountryCode } = useCountryProfile();
 
   const { data: categories = [] } = useQuery({
     queryKey: ["/api/categories"],
@@ -157,6 +172,39 @@ export function CategoryStrip({ selectedCategoryId, onSelect, onSearch }: Catego
               #{topic.tag}
             </button>
           ))}
+
+          {/* Region divider */}
+          <div className="flex-shrink-0 w-px h-4 bg-border mx-2 opacity-60" aria-hidden="true" />
+
+          {/* Region label */}
+          <span className="flex-shrink-0 text-[9px] font-black uppercase tracking-[.2em] text-muted-foreground/50 px-1 whitespace-nowrap" aria-hidden="true">
+            Region:
+          </span>
+
+          {/* Region pills */}
+          {REGIONS.map((region) => {
+            const isActive = countryCode === region.code;
+            return (
+              <button
+                key={region.code}
+                onClick={() => setCountryCode(region.code)}
+                className={`
+                  flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5
+                  text-[10px] font-black uppercase tracking-wider rounded-full border transition-all duration-200
+                  ${
+                    isActive
+                      ? "bg-accent-editorial/10 border-accent-editorial/60 text-accent-editorial"
+                      : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border hover:bg-secondary/40"
+                  }
+                `}
+                aria-label={`Switch to ${region.label} edition`}
+                aria-pressed={isActive}
+              >
+                <span className="text-[12px] leading-none">{region.flag}</span>
+                <span>{region.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

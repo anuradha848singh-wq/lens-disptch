@@ -35,3 +35,6 @@ errors.txt
 *.swo
 Thumbs.db
 .gemini/
+venv/
+*.rej
+

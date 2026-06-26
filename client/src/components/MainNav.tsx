@@ -4,11 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Search, Moon, Sun, LayoutDashboard, LogOut, ShieldCheck, Settings, Menu, X, BookmarkIcon, Clock, Eye } from "lucide-react";
+import { Search, Moon, Sun, LayoutDashboard, LogOut, ShieldCheck, Settings, Menu, X, BookmarkIcon, Clock, Eye, Globe, ChevronDown } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "@/lib/auth-context";
 import { AuthModal } from "./AuthModal";
 import { useQuery } from "@tanstack/react-query";
+import { useCountryProfile } from "@/hooks/useCountryProfile";
 
 interface MainNavProps {
   onSearch?: (q: string) => void;
@@ -39,9 +40,24 @@ export function MainNav({ onSearch = () => {}, searchQuery = "" }: MainNavProps)
 
   const openAuth = (mode: "login" | "register") => { setAuthMode(mode); setAuthOpen(true); };
 
+  const { countryCode, setCountryCode } = useCountryProfile();
+  const [editionOpen, setEditionOpen] = useState(false);
+
+  const EDITIONS = [
+    { code: "GLOBAL", label: "World",  flag: "🌍" },
+    { code: "US",     label: "US",     flag: "🇺🇸" },
+    { code: "UK",     label: "UK",     flag: "🇬🇧" },
+    { code: "IN",     label: "India",  flag: "🇮🇳" },
+    { code: "AU",     label: "Aus",    flag: "🇦🇺" },
+    { code: "CA",     label: "Canada", flag: "🇨🇦" },
+    { code: "DE",     label: "Germany",flag: "🇩🇪" },
+  ];
+  const currentEdition = EDITIONS.find(e => e.code === countryCode) ?? EDITIONS[0];
+
   const tabs = [
     { label: "Home", href: "/" },
     { label: "For You", href: "/for-you" },
+    { label: "Factuality", href: "/factuality" },
     { label: "Blindspot", href: "/blindspot" },
     { label: "My Bias", href: "/my-bias" },
     { label: "History", href: "/history" },
@@ -206,6 +222,28 @@ export function MainNav({ onSearch = () => {}, searchQuery = "" }: MainNavProps)
                   </div>
                 </Link>
               ))}
+              {/* Edition selector in mobile drawer */}
+              <div className="px-6 pt-4 pb-2 border-t border-border/40 mt-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground mb-3">
+                  Edition
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {EDITIONS.map(ed => (
+                    <button
+                      key={ed.code}
+                      onClick={() => { setCountryCode(ed.code); setMobileMenuOpen(false); }}
+                      className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg border transition-all ${
+                        ed.code === countryCode
+                          ? "border-accent-editorial bg-accent-editorial/5 text-accent-editorial"
+                          : "border-border/40 text-muted-foreground hover:border-border hover:text-foreground"
+                      }`}
+                    >
+                      <span className="text-xl">{ed.flag}</span>
+                      <span className="text-[9px] font-black uppercase tracking-wider">{ed.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             {!user && (
               <div className="p-4 border-t border-border space-y-2">
@@ -235,16 +273,50 @@ export function MainNav({ onSearch = () => {}, searchQuery = "" }: MainNavProps)
             ))}
           </div>
 
+          {/* Edition Switcher */}
+          <div className="relative hidden lg:block" id="edition-switcher">
+            <button
+              onClick={() => setEditionOpen(v => !v)}
+              className="flex items-center gap-2 py-1.5 px-3.5 bg-secondary/30 rounded-full border border-border/50 hover:bg-secondary/60 cursor-pointer transition-colors"
+              aria-label="Switch edition"
+              aria-expanded={editionOpen}
+            >
+              <span className="text-base leading-none">{currentEdition.flag}</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-foreground">{currentEdition.label}</span>
+              <ChevronDown className={`w-3 h-3 text-muted-foreground transition-transform ${editionOpen ? "rotate-180" : ""}`} />
+            </button>
+            {editionOpen && (
+              <div className="absolute top-full left-0 mt-2 z-50 bg-card border border-border rounded-xl shadow-xl py-1.5 min-w-[160px] animate-fade-in-up">
+                <p className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground px-3 py-1.5">
+                  Edition
+                </p>
+                {EDITIONS.map(ed => (
+                  <button
+                    key={ed.code}
+                    onClick={() => { setCountryCode(ed.code); setEditionOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-secondary/60 transition-colors ${
+                      ed.code === countryCode ? "bg-accent-editorial/5 text-accent-editorial" : "text-foreground"
+                    }`}
+                  >
+                    <span className="text-base">{ed.flag}</span>
+                    <span className="text-[12px] font-bold">{ed.label}</span>
+                    {ed.code === countryCode && <span className="ml-auto text-accent-editorial text-[10px] font-black">✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Live Coverage Lean */}
           <Link href="/blindspot">
-            <div className="hidden lg:flex items-center gap-3 py-1 px-4 bg-secondary/30 rounded-full border border-border/50 hover:bg-secondary/60 cursor-pointer transition-colors">
-              <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground whitespace-nowrap">Today's Coverage Lean</span>
-              <div className="flex w-32 h-1.5 rounded-full overflow-hidden bg-border/30">
+            <div className="hidden xl:flex items-center gap-3 py-1 px-4 bg-secondary/30 rounded-full border border-border/50 hover:bg-secondary/60 cursor-pointer transition-colors">
+              <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground whitespace-nowrap">Today's Lean</span>
+              <div className="flex w-24 h-1.5 rounded-full overflow-hidden bg-border/30">
                 <div className="bias-left h-full" style={{ width: `${lean?.leftPct ?? 42}%` }} />
                 <div className="bias-center h-full" style={{ width: `${lean?.centerPct ?? 35}%` }} />
                 <div className="bias-right h-full" style={{ width: `${lean?.rightPct ?? 23}%` }} />
               </div>
-              <span className="text-[10px] font-bold text-foreground">{lean?.leftPct ?? 42}L · {lean?.rightPct ?? 23}R</span>
+              <span className="text-[10px] font-bold text-foreground">{lean?.leftPct ?? 42}L·{lean?.rightPct ?? 23}R</span>
             </div>
           </Link>
 

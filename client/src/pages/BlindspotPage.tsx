@@ -80,18 +80,20 @@ export default function BlindspotPage() {
                 <p className="text-xs text-muted-foreground/60 mt-1">Coverage is currently balanced</p>
               </div>
             ) : (
-              <motion.div
-                className="grid grid-cols-1 gap-4"
-                initial="hidden"
-                animate="show"
-                variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } }}
-              >
-                {proEstablishmentBlindspots.map((a: any) => (
-                  <motion.div key={a.id} variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}>
+              <div className="grid grid-cols-1 gap-4">
+                {proEstablishmentBlindspots.map((a: any, i: number) => (
+                  <motion.div
+                    key={a.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-40px" }}
+                    transition={{ duration: 0.22, delay: Math.min(i, 5) * 0.04, ease: "easeOut" }}
+                    style={{ willChange: "opacity, transform" }}
+                  >
                     <StoryCard article={a} variant="standard" />
                   </motion.div>
                 ))}
-              </motion.div>
+              </div>
             )}
           </div>
 
@@ -116,18 +118,20 @@ export default function BlindspotPage() {
                 <p className="text-xs text-muted-foreground/60 mt-1">Coverage is currently balanced</p>
               </div>
             ) : (
-              <motion.div
-                className="grid grid-cols-1 gap-4"
-                initial="hidden"
-                animate="show"
-                variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } }}
-              >
-                {proOppositionBlindspots.map((a: any) => (
-                  <motion.div key={a.id} variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}>
+              <div className="grid grid-cols-1 gap-4">
+                {proOppositionBlindspots.map((a: any, i: number) => (
+                  <motion.div
+                    key={a.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-40px" }}
+                    transition={{ duration: 0.22, delay: Math.min(i, 5) * 0.04, ease: "easeOut" }}
+                    style={{ willChange: "opacity, transform" }}
+                  >
                     <StoryCard article={a} variant="standard" />
                   </motion.div>
                 ))}
-              </motion.div>
+              </div>
             )}
           </div>
         </div>

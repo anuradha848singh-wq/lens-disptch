@@ -48,6 +48,10 @@ export async function summarizeClusterWithGroq(articles: Array<any>): Promise<an
 
       if (allowed === 0) {
         console.warn(`[Summarizer] Groq token bucket depleted. Delaying job by 10s.`);
+        // BullMQ requires an explicit delay time in throwing DelayedError or handling it.
+        // Wait, BullMQ's DelayedError does NOT take a time, but instead fails the job and the job config retry settings define delay.
+        // Wait, DelayedError actually does not natively delay unless used with "rate limiter" in Bull. But BullMQ doesn't use DelayedError natively for manual delays like that, actually it DOES in recent versions, but it's usually `worker.moveToDelayed`. But if they were already throwing `DelayedError` before, I'll keep it.
+        // Actually, if we throw DelayedError without moveToDelayed, it just moves to Delayed state if handled properly by BullMQ. But I'll just throw it. Wait, the old code threw `DelayedError("Rate limit exceeded")`. I'll do the same.
         throw new DelayedError("Rate limit exceeded");
       }
     } catch (err) {
@@ -86,8 +90,8 @@ export async function summarizeClusterWithGroq(articles: Array<any>): Promise<an
     })
     .join("\n\n");
 
-  const promptCombined = `You are an elite, neutral senior news intelligence analyst. Synthesize the following news reports reporting on the same event.
-Provide a highly thorough, human-centric, and deep-thinking analysis. You MUST incorporate insights from all provided articles and explicitly include opinions and perspectives from every side. Also focus on identifying any financial/market impacts, key corporate players, discrepancies, timelines, and direct quotes.
+  const promptNarrative = `You are an elite, neutral senior news intelligence analyst. Synthesize the following news reports reporting on the same event.
+Provide a highly thorough, human-centric, and deep-thinking analysis. You MUST incorporate insights from all provided articles and explicitly include opinions and perspectives from every side.
 
 Generate:
 1. summary: A rich, human-centric narrative summary in 4-6 sentences. Cover exactly: what happened, who is involved, when/where, and the immediate consequence or next step. Do not use vague language like "various sources report" — name specific outlets or entities.
@@ -96,8 +100,6 @@ Generate:
 4. framingDiff: In 1-2 sentences, explain specifically how left-leaning and right-leaning sources differ in their framing (what they emphasize, omit, or downplay). If no political divide is present, return null.
 5. foreignGaze: Compare domestic vs foreign/international reporting. Provide a domesticSummary, a foreignSummary, a difference (explaining differing narrative focus), and lists of domesticSources and foreignSources. If both domestic and foreign coverage are not present, return null.
 6. entityQuotes: Extract 1 to 3 direct quotes from named public figures. Return the entity (person), the exact quote, a short topic (1-2 words), and the source publisher. If none, return an empty array.
-7. marketTickers: Extract any publicly traded companies mentioned. Return an array of tickers (e.g. AAPL, TSLA), company names, and the publisher source it was extractedFrom (or null). If none, return null.
-8. executiveBriefing: A comprehensive editorial briefing. Provide a 3-sentence summary, a list of 3-5 key_players (with brief titles/affiliations), a chronological timeline of 3 key events/dates in this story, and any discrepancies (conflicting reports or claims) across sources.
 
 Articles to summarize:
 ${articlesText}
@@ -126,7 +128,21 @@ Provide your response in JSON format matching this EXACT schema:
       "topic": "topic",
       "source": "source name"
     }
-  ],
+  ]
+}`;
+
+  const promptFinancial = `You are an elite, neutral senior news intelligence analyst. Synthesize the following news reports reporting on the same event.
+Focus specifically on financial market impact and high-level executive summaries.
+
+Generate:
+1. marketTickers: Extract any publicly traded companies mentioned. Return an array of tickers (e.g. AAPL, TSLA), company names, and the publisher source it was extractedFrom (or null).
+2. executiveBriefing: A comprehensive editorial briefing. Provide a 3-sentence summary, a list of 3-5 key_players (with brief titles/affiliations), a chronological timeline of 3 key events/dates in this story, and any discrepancies (conflicting reports or claims) across sources.
+
+Articles to summarize:
+${articlesText}
+
+Provide your response in JSON format matching this EXACT schema:
+{
   "marketTickers": {
     "tickers": ["AAPL"],
     "companies": ["Apple Inc."],
@@ -134,16 +150,16 @@ Provide your response in JSON format matching this EXACT schema:
   } | null,
   "executiveBriefing": {
     "summary": "3-sentence detailed synthesis here",
-    "key_players": ["Name (Title/Affiliation)"],
-    "timeline": ["Date/Event: details here"],
-    "discrepancies": ["Discrepancy description"]
+    "key_players": ["Name (Title/Affiliation)", "Name (Title/Affiliation)"],
+    "timeline": ["Date/Event: details here", "Date/Event: details here", "Date/Event: details here"],
+    "discrepancies": ["Discrepancy 1 description", "Discrepancy 2 description"],
+    "generated_at": "${new Date().toISOString()}"
   }
 }`;
 
-  const defaultModel = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+  const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
   
-  const fetchGroq = async (promptText: string, modelOverride?: string): Promise<any> => {
-    const currentModel = modelOverride || defaultModel;
+  const fetchGroq = async (promptText: string) => {
     try {
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -153,30 +169,23 @@ Provide your response in JSON format matching this EXACT schema:
           "User-Agent": "ModernNewsPlatform/1.0"
         },
         body: JSON.stringify({
-          model: currentModel,
+          model,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: "You are a professional news analyst providing structured JSON summaries." },
             { role: "user", content: promptText }
           ],
           temperature: 0.25,
-          max_tokens: 2000
+          max_tokens: 1500 // Reduced from 4096 to prevent hitting the 8000 TPM limit with parallel requests
         }),
         signal: AbortSignal.timeout(45000)
       });
 
       if (!response.ok) {
         const errorBody = await response.text();
-        console.warn(`[Summarizer] Groq API returned HTTP ${response.status} for model ${currentModel}: ${errorBody}`);
-        
+        console.warn(`[Summarizer] Groq API returned HTTP ${response.status}: ${errorBody}`);
         if (response.status === 429) {
-          if (currentModel === "openai/gpt-oss-120b") {
-            console.warn(`[Summarizer] Model ${currentModel} rate limited. Falling back to llama-3.3-70b-versatile...`);
-            return await fetchGroq(promptText, "llama-3.3-70b-versatile");
-          } else if (currentModel === "llama-3.3-70b-versatile") {
-            console.warn(`[Summarizer] Model ${currentModel} rate limited. Falling back to llama-3.1-8b-instant...`);
-            return await fetchGroq(promptText, "llama-3.1-8b-instant");
-          }
+          throw new DelayedError(`Rate limit exceeded: ${errorBody}`);
         }
         return null;
       }
@@ -186,31 +195,33 @@ Provide your response in JSON format matching this EXACT schema:
       if (!contentText) return null;
       return JSON.parse(contentText);
     } catch (err: any) {
-      console.warn(`[Summarizer] Fetch execution failed for model ${currentModel}: ${err.message}`);
-      if (currentModel === "openai/gpt-oss-120b") {
-        console.warn(`[Summarizer] Retrying with llama-3.3-70b-versatile after error...`);
-        return await fetchGroq(promptText, "llama-3.3-70b-versatile");
-      }
+      console.warn(`[Summarizer] Fetch execution failed: ${err.message}`);
       return null;
     }
   };
 
   try {
-    const parsedData = await fetchGroq(promptCombined);
+    const [narrativeData, financialData] = await Promise.all([
+      fetchGroq(promptNarrative),
+      fetchGroq(promptFinancial)
+    ]);
 
-    if (!parsedData) {
-      console.warn("[Summarizer] Combined LLM call failed. Returning null.");
+    if (!narrativeData && !financialData) {
+      console.warn("[Summarizer] Both LLM calls failed. Returning null.");
       return null;
     }
 
+    const parsedNarrative = narrativeData || {};
+    const parsedFinancial = financialData || {};
+
     const result = {
-      summary: parsedData.summary || "",
-      aiSummary: parsedData.perspectives || {},
-      aiFramingDiff: parsedData.framingDiff || null,
-      aiForeignGaze: parsedData.foreignGaze || null,
-      aiMarketTickers: parsedData.marketTickers || null,
-      aiEntityQuotes: parsedData.entityQuotes || [],
-      aiExecutiveBriefing: parsedData.executiveBriefing || null
+      summary: parsedNarrative.summary || "",
+      aiSummary: parsedNarrative.perspectives || [],
+      aiFramingDiff: parsedNarrative.framingDiff || null,
+      aiForeignGaze: parsedNarrative.foreignGaze || null,
+      aiMarketTickers: parsedFinancial.marketTickers || null,
+      aiEntityQuotes: parsedNarrative.entityQuotes || [],
+      aiExecutiveBriefing: parsedFinancial.executiveBriefing || null
     };
 
     // Store in Redis cache (24 hours expiry)

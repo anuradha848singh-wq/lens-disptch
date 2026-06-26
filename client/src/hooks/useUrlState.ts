@@ -14,7 +14,6 @@ export interface UrlState {
   categoryId: string | null;
   categorySlug: string | null;
   search: string;
-  region: string | null;
 }
 
 function parseUrlState(): UrlState {
@@ -26,7 +25,6 @@ function parseUrlState(): UrlState {
     categoryId:   params.get("cat") || null,
     categorySlug: params.get("slug") || null,
     search:       params.get("q") || "",
-    region:       params.get("region") || null,
   };
 }
 
@@ -35,7 +33,6 @@ function buildSearch(state: UrlState): string {
   if (state.categoryId)   params.set("cat", state.categoryId);
   if (state.categorySlug) params.set("slug", state.categorySlug);
   if (state.search)       params.set("q", state.search);
-  if (state.region)       params.set("region", state.region);
   const qs = params.toString();
   return qs ? `?${qs}` : "";
 }
@@ -71,25 +68,16 @@ export function useUrlState() {
     [setState]
   );
 
-  const setRegion = useCallback(
-    (region: string | null) => {
-      setState({ region });
-    },
-    [setState]
-  );
-
   const clear = useCallback(() => {
-    setState({ categoryId: null, categorySlug: null, search: "", region: null });
+    setState({ categoryId: null, categorySlug: null, search: "" });
   }, [setState]);
 
   return {
     categoryId:   state.categoryId,
     categorySlug: state.categorySlug,
     search:       state.search,
-    region:       state.region,
     setCategoryId,
     setSearch,
-    setRegion,
     clear,
   };
 }

@@ -18,12 +18,12 @@ interface CountryContextType {
 }
 
 const CountryContext = createContext<CountryContextType>({
-  countryCode: 'US',
+  countryCode: 'GLOBAL',
   setCountryCode: () => {},
 });
 
 export function CountryProfileProvider({ children }: { children: ReactNode }) {
-  const [countryCode, setCountryCode] = useState<string>('US');
+  const [countryCode, setCountryCode] = useState<string>('GLOBAL');
 
   // Load from local storage on mount
   useEffect(() => {

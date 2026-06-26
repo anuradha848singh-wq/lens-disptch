@@ -32,6 +32,7 @@ import { useCountryProfile } from "@/hooks/useCountryProfile";
 import { ExecutiveBriefing, ForeignGazePanel, MarketImpact, EntityQuoteTracker } from "@/components/PremiumAIFeatures";
 import { useEffect } from "react";
 import { motion, useScroll, useSpring, AnimatePresence } from "framer-motion";
+import { SharePanel } from "@/components/SharePanel";
 
 function ReadingProgressBar() {
   const { scrollYProgress } = useScroll();
@@ -890,14 +891,6 @@ export default function ArticleDetail() {
       }
     };
   }, [article?.clusterId, user?.id]);
-  const handleShare = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      toast({ title: "Link copied to clipboard" });
-    } catch {
-      toast({ title: "Share link", description: window.location.href });
-    }
-  };
 
   // ── Summary ──────────────────────────────────────────────────────────────
   const aiInsights = (article?.aiInsights as string[]) || [];
@@ -1059,16 +1052,38 @@ export default function ArticleDetail() {
                 </div>
                 
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <div className="w-5 h-5 rounded-full bg-foreground flex items-center justify-center text-background text-[10px]">f</div>
-                    <div className="w-5 h-5 rounded-full bg-foreground flex items-center justify-center text-background text-[10px]">x</div>
-                    <div className="w-5 h-5 rounded-full bg-foreground flex items-center justify-center text-background text-[10px]">in</div>
-                    <div className="w-5 h-5 rounded-full bg-foreground flex items-center justify-center text-background text-[10px]"><Share2 className="w-2.5 h-2.5" /></div>
-                    <div className="w-5 h-5 rounded-full bg-foreground flex items-center justify-center text-background text-[10px]"><Bookmark className="w-2.5 h-2.5" /></div>
-                  </div>
-                  <span className="text-border mx-1">|</span>
-                  <Bookmark className="w-4 h-4 text-muted-foreground" />
-                  <ExternalLink className="w-4 h-4 text-muted-foreground" />
+                  {/* Real Share Panel */}
+                  {id && activeArticle?.title && (
+                    <SharePanel
+                      articleId={id}
+                      title={activeArticle.title}
+                      url={typeof window !== "undefined" ? window.location.href : ""}
+                    />
+                  )}
+                  <button
+                    onClick={() => user ? bookmarkMutation.mutate() : toast({ title: "Sign in to bookmark" })}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border border-border/60 hover:bg-secondary/60 hover:border-border transition-all ${
+                      isBookmarked ? "text-accent-editorial border-accent-editorial/50 bg-accent-editorial/5" : "text-muted-foreground"
+                    }`}
+                    aria-label={isBookmarked ? "Remove bookmark" : "Bookmark article"}
+                  >
+                    {isBookmarked ? (
+                      <BookmarkCheck className="w-3.5 h-3.5" />
+                    ) : (
+                      <Bookmark className="w-3.5 h-3.5" />
+                    )}
+                    {isBookmarked ? "Saved" : "Save"}
+                  </button>
+                  <a
+                    href={activeArticle?.sourceUrl || activeArticle?.url || "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border border-border/60 hover:bg-secondary/60 hover:border-border transition-all text-muted-foreground hover:text-foreground"
+                    aria-label="Read original article"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Source
+                  </a>
                 </div>
               </div>
 
@@ -1239,7 +1254,8 @@ export default function ArticleDetail() {
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 rounded-full"
-                onClick={handleShare}
+                onClick={() => navigator.clipboard.writeText(window.location.href).then(() => toast({ title: "Link copied!" })).catch(() => {})}
+                aria-label="Copy link"
               >
                 <Share2 className="w-4 h-4" />
               </Button>

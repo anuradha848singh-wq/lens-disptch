@@ -1530,9 +1530,9 @@ export async function generateSmartSummary(clusterId: string) {
   const currentCount = articlesInGroup.length;
   const lastCount = (existingCluster as any)?.sourceCount || 0;
 
-  const lastSummary = existingCluster?.aiEnrichedAt;
+  const lastSummary = (existingCluster as any)?.summaryUpdatedAt || (existingCluster as any)?.updatedAt;
 
-  if (existingCluster?.summary && existingCluster?.aiEnrichedAt) {
+  if (existingCluster?.summary) {
     const sourceGrowth = lastCount > 0 ? currentCount / lastCount : currentCount;
     if (sourceGrowth < 1.5 && currentCount < 15) {
       console.log(`[Summary] Cluster ${clusterId} still small/stable (${currentCount} sources) — skipping re-summary`);
