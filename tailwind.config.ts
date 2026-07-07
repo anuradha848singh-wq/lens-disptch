@@ -6,11 +6,31 @@ export default {
   theme: {
     extend: {
       borderRadius: {
-        lg: ".5625rem", /* 9px */
-        md: ".375rem", /* 6px */
-        sm: ".1875rem", /* 3px */
+        lg: "0px",
+        md: "0px",
+        sm: "0px",
       },
       colors: {
+        paper: "var(--paper)",
+        ink: {
+          DEFAULT: "var(--ink)",
+          muted: "var(--ink-muted)",
+        },
+        darkroom: "var(--darkroom)",
+        signal: {
+          yellow: "var(--signal-yellow)",
+        },
+        lens: {
+          cyan: "var(--lens-cyan)",
+        },
+        wire: {
+          red: "var(--wire-red)",
+          blue: "var(--wire-blue)",
+        },
+        hairline: {
+          DEFAULT: "var(--hairline)",
+          dashed: "var(--hairline-dashed)",
+        },
         // Flat / base colors (regular buttons)
         background: "hsl(var(--background) / <alpha-value>)",
         foreground: "hsl(var(--foreground) / <alpha-value>)",
@@ -83,10 +103,10 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["DM Sans", "sans-serif"],
-        serif: ["Lora", "Georgia", "serif"],
-        display: ["Playfair Display", "Georgia", "serif"],
-        mono: ["var(--font-mono)"],
+        sans: ["Public Sans", "sans-serif"],
+        serif: ["Newsreader", "Georgia", "serif"],
+        display: ["Newsreader", "Georgia", "serif"],
+        mono: ["IBM Plex Mono", "monospace"],
       },
       keyframes: {
         "accordion-down": {
@@ -97,10 +117,15 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        marquee: {
+          "0%": { transform: "translateX(0%)" },
+          "100%": { transform: "translateX(-50%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "marquee": "marquee 40s linear infinite",
       },
     },
   },

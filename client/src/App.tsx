@@ -11,11 +11,11 @@ import { CookieConsent } from "@/components/CookieConsent";
 import { CountryProfileProvider } from "@/hooks/useCountryProfile";
 import { initClientLogger, logComponentError, flushClientLogs } from "@/lib/logger";
 import { motion, AnimatePresence } from "framer-motion";
+import { CustomCursor } from "@/components/ui/CustomCursor";
 
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const ArticleDetail = lazy(() => import("@/pages/ArticleDetail"));
 const EditorDashboard = lazy(() => import("@/pages/EditorDashboard"));
-const AdminPanel = lazy(() => import("@/pages/AdminPanel"));
 const BookmarksPage = lazy(() => import("@/pages/BookmarksPage"));
 const PublishersPage = lazy(() => import("@/pages/PublishersPage"));
 const BlindspotPage = lazy(() => import("@/pages/BlindspotPage"));
@@ -27,7 +27,9 @@ const SystemDashboard = lazy(() => import("@/pages/SystemDashboard"));
 const AdminDashboard = lazy(() => import("@/pages/AdminDashboard"));
 const FactualityPage = lazy(() => import("@/pages/FactualityPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
+const PricingPage = lazy(() => import("@/pages/PricingPage"));
 const NotFound = lazy(() => import("@/pages/not-found"));
+const DesignTest = lazy(() => import("@/pages/DesignTest"));
 
 // ── Scroll Restoration ────────────────────────────────────────────────────
 const SCROLL_KEY_PREFIX = "dispatch_scroll:";
@@ -168,8 +170,7 @@ function Router() {
             <Route path="/" component={HomePage} />
             <Route path="/article/:id" component={ArticleDetail} />
             <Route path="/dashboard" component={EditorDashboard} />
-            <Route path="/admin" component={AdminPanel} />
-            <Route path="/admin/dashboard" component={AdminDashboard} />
+            <Route path="/admin" component={AdminDashboard} />
             <Route path="/system" component={SystemDashboard} />
             <Route path="/bookmarks" component={BookmarksPage} />
             <Route path="/publishers" component={PublishersPage} />
@@ -181,6 +182,8 @@ function Router() {
             <Route path="/compare/:clusterId" component={ComparePage} />
             <Route path="/factuality" component={FactualityPage} />
             <Route path="/profile/:id" component={ProfilePage} />
+            <Route path="/pricing" component={PricingPage} />
+            <Route path="/design-test" component={DesignTest} />
             <Route component={NotFound} />
           </Switch>
         </PageTransition>
@@ -206,6 +209,7 @@ function App() {
               <Toaster />
               <CookieConsent />
               <ErrorBoundary>
+                <CustomCursor />
                 <Router />
               </ErrorBoundary>
             </CountryProfileProvider>

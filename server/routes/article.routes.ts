@@ -12,6 +12,14 @@ import { deriveBiasLabel } from "../routes";
 
 const articleRouter = Router();
 
+async function resolveArticle(idOrSlug: string) {
+  let article = await storage.getArticle(idOrSlug);
+  if (!article) {
+    article = await storage.getArticleBySlug(idOrSlug);
+  }
+  return article;
+}
+
 // Public API middleware for caching
 const publicCache = (res: any, ttl = 300) => {
   res.setHeader("Cache-Control", `public, s-maxage=${ttl}, stale-while-revalidate=${Math.round(ttl / 5)}`);
@@ -106,7 +114,7 @@ articleRouter.get("/", optionalAuth, async (req, res) => {
 
 articleRouter.get("/:id/full-content", optionalAuth, async (req, res) => {
   try {
-    const article = await storage.getArticle(req.params.id);
+    const article = await resolveArticle(req.params.id);
     if (!article) return res.status(404).json({ error: "Article not found" });
 
     // Use pre-scraped content from background worker
@@ -133,7 +141,7 @@ articleRouter.get("/:id/full", optionalAuth, async (req, res) => {
   try {
     const articleId = req.params.id;
     // 1. Fetch main article details
-    const article = await storage.getArticle(articleId);
+    const article = await resolveArticle(articleId);
     if (!article) {
       return res.status(404).json({ error: "Article not found" });
     }
@@ -276,7 +284,7 @@ articleRouter.get("/:id/full", optionalAuth, async (req, res) => {
 
 articleRouter.get("/:id", optionalAuth, async (req, res) => {
   try {
-    const article = await storage.getArticle(req.params.id);
+    const article = await resolveArticle(req.params.id);
     if (!article) {
       return res.status(404).json({ error: "Article not found" });
     }
@@ -324,8 +332,11 @@ articleRouter.post("/:id/view", optionalAuth, async (req, res) => {
     // Explicitly prevent caching for tracking endpoints
     res.setHeader("Cache-Control", "no-store, max-age=0");
     
+    const article = await resolveArticle(req.params.id);
+    const realId = article ? article.id : req.params.id;
+
     await storage.trackArticleView({
-      articleId: req.params.id,
+      articleId: realId,
       viewerId: (req as any).user?.id || null,
       referrer: req.get('referer') || req.body?.referrer || null,
       metadata: null,
@@ -339,9 +350,12 @@ articleRouter.post("/:id/view", optionalAuth, async (req, res) => {
 
 articleRouter.get("/:id/related", optionalAuth, async (req, res) => {
   try {
+    const article = await resolveArticle(req.params.id);
+    if (!article) return res.status(404).json({ error: "Article not found" });
+
     const data = await cache.fetch(
-      `related_articles:${req.params.id}`,
-      () => storage.getRelatedArticles(req.params.id),
+      `related_articles:${article.id}`,
+      () => storage.getRelatedArticles(article.id),
       600  // 10 min — related articles change slowly
     );
     publicCache(res, 600); // 10 min cache
@@ -354,9 +368,12 @@ articleRouter.get("/:id/related", optionalAuth, async (req, res) => {
 
 articleRouter.get("/:id/similar", optionalAuth, async (req, res) => {
   try {
+    const article = await resolveArticle(req.params.id);
+    if (!article) return res.status(404).json({ error: "Article not found" });
+
     const data = await cache.fetch(
-      `similar_articles:${req.params.id}`,
-      () => storage.getSimilarArticles(req.params.id),
+      `similar_articles:${article.id}`,
+      () => storage.getSimilarArticles(article.id),
       300  // 5 min — new sources can appear as story develops
     );
     publicCache(res, 300); // 5 min cache
@@ -387,8 +404,11 @@ articleRouter.post("/", authenticateUser, requireRole("admin"), async (req, res)
 
 articleRouter.patch("/:id", authenticateUser, requireRole("admin"), async (req, res) => {
   try {
+    const article = await resolveArticle(req.params.id);
+    if (!article) return res.status(404).json({ error: "Article not found" });
+
     const { categoryIds, tagIds, ...updateData } = req.body;
-    const updated = await storage.updateArticle(req.params.id, updateData, categoryIds, tagIds);
+    const updated = await storage.updateArticle(article.id, updateData, categoryIds, tagIds);
     res.json(updated);
   } catch (error: any) {
     console.error("Update article error:", error);
@@ -398,7 +418,10 @@ articleRouter.patch("/:id", authenticateUser, requireRole("admin"), async (req, 
 
 articleRouter.post("/:id/publish", authenticateUser, requireRole("admin"), async (req, res) => {
   try {
-    const published = await storage.publishArticle(req.params.id);
+    const article = await resolveArticle(req.params.id);
+    if (!article) return res.status(404).json({ error: "Article not found" });
+
+    const published = await storage.publishArticle(article.id);
     res.json(published);
   } catch (error: any) {
     console.error("Publish article error:", error);
@@ -408,12 +431,12 @@ articleRouter.post("/:id/publish", authenticateUser, requireRole("admin"), async
 
 articleRouter.delete("/:id", authenticateUser, requireRole("admin"), async (req, res) => {
   try {
-    const article = await storage.getArticle(req.params.id);
+    const article = await resolveArticle(req.params.id);
     if (!article) {
       return res.status(404).json({ error: "Article not found" });
     }
 
-    await storage.deleteArticle(req.params.id);
+    await storage.deleteArticle(article.id);
     res.json({ success: true });
   } catch (error: any) {
     console.error("Delete article error:", error);
@@ -423,9 +446,12 @@ articleRouter.delete("/:id", authenticateUser, requireRole("admin"), async (req,
 
 articleRouter.post("/:id/share", optionalAuth, async (req, res) => {
   try {
+    const article = await resolveArticle(req.params.id);
+    if (!article) return res.status(404).json({ error: "Article not found" });
+
     const user = (req as any).user;
     const { platform = "copy" } = req.body;
-    const event = await storage.trackShare(req.params.id, user?.id || null, platform);
+    const event = await storage.trackShare(article.id, user?.id || null, platform);
     res.json(event);
   } catch (error) {
     console.error("Share tracking error:", error);
@@ -437,7 +463,7 @@ articleRouter.get("/:id/omissions", optionalAuth, async (req, res) => {
   try {
     const articleId = req.params.id;
     // 1. Get the article to find its cluster
-    const article = await storage.getArticle(articleId);
+    const article = await resolveArticle(articleId);
     if (!article || !article.clusterId) {
       return res.json([]);
     }
@@ -486,3 +512,4 @@ articleRouter.get("/:id/omissions", optionalAuth, async (req, res) => {
 });
 
 export { articleRouter };
+

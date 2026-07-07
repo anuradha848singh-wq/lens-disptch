@@ -11,7 +11,7 @@ type ArticleWithClusterCounts = ArticleWithDetails & {
   proOppositionCount?: number;
 };
 
-// ─── Trending Topics Widget ──────────────────────────────────────────────────
+// ─── Trending Topics Widget (Wire Ticker format) ──────────────────────────────────────────────────
 export function TrendingTopicsWidget({ articles }: { articles?: ArticleWithDetails[] }) {
   const [, setLocation] = useLocation();
 
@@ -21,38 +21,30 @@ export function TrendingTopicsWidget({ articles }: { articles?: ArticleWithDetai
     staleTime: 60000,
   });
 
-  // Prefer real trending data; fall back to articles prop
   const topics: any[] = Array.isArray(trendingData) && trendingData.length > 0
-    ? (trendingData as any[]).slice(0, 4)
-    : (articles || []).slice(0, 4);
+    ? (trendingData as any[]).slice(0, 5)
+    : (articles || []).slice(0, 5);
 
   return (
-    <div className="bg-[#151515] rounded-xl text-white overflow-hidden shadow-md">
-      <div className="p-5 border-b border-white/10 flex items-center justify-between">
-        <h2 className="text-[11px] font-black uppercase tracking-[.2em] flex items-center gap-2 text-white/90">
+    <div className="bg-[var(--card-surface)] border border-[var(--hairline)] flex flex-col mb-6">
+      <div className="p-4 border-b border-[var(--hairline)] flex items-center justify-between">
+        <h2 className="font-plex-mono text-[13px] font-bold tracking-widest uppercase text-[var(--ink)] flex items-center gap-2">
           Trending Topics
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
-            <polyline points="16 7 22 7 22 13" />
-          </svg>
         </h2>
       </div>
 
-      <div className="divide-y divide-white/10">
+      <div className="flex flex-col">
         {isLoading && topics.length === 0 ? (
           <div className="p-5 space-y-4 animate-pulse">
-            {[80, 65, 55].map((w, i) => (
-              <div key={i} className="flex gap-4 items-start py-2">
-                <div className="w-6 h-6 bg-white/10 rounded flex-shrink-0" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 bg-white/10 rounded w-11/12" />
-                  <div className="h-3 bg-white/10 rounded w-1/3" />
-                </div>
+            {[80, 65, 55, 70].map((w, i) => (
+              <div key={i} className="flex flex-col gap-2 py-2">
+                <div className="h-3 bg-muted rounded w-1/3" />
+                <div className="h-4 bg-muted rounded w-11/12" />
               </div>
             ))}
           </div>
         ) : topics.length === 0 ? (
-          <div className="p-4 text-xs text-white/40 text-center py-8">Loading trending stories…</div>
+          <div className="p-4 text-mono-metadata text-[var(--ink-muted)] text-center py-8">No trending data</div>
         ) : (
           topics.map((t: any, i: number) => {
             const isApiData = !!t.name;
@@ -61,34 +53,29 @@ export function TrendingTopicsWidget({ articles }: { articles?: ArticleWithDetai
             return (
               <div
                 key={t.id || t.name || i}
-                className="p-4 flex gap-4 hover:bg-white/5 cursor-pointer transition-colors"
+                className="p-4 flex flex-col gap-1 hover:bg-[var(--paper)] cursor-pointer transition-colors border-b border-dashed border-[var(--hairline-dashed)] last:border-none"
                 onClick={() => !isApiData && t.id && setLocation(`/article/${t.id}`)}
               >
-                <span className="text-white font-serif font-black text-lg pt-0.5 min-w-[12px]">{i + 1}</span>
-                <div>
-                  <h3 className="font-serif text-[15px] leading-snug mb-2 font-bold text-white/90 line-clamp-2">
-                    {t.name || t.title || t.headline}
-                  </h3>
-                  <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-white/50">
-                    {rightOnly && (
-                      <span className="text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded-sm">RIGHT ONLY</span>
-                    )}
-                    {leftOnly && (
-                      <span className="text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded-sm">LEFT ONLY</span>
-                    )}
-                    <span>{t.mentions ? `${t.mentions} MENTIONS` : `${t.sourceCount || 1} SOURCES`}</span>
+                <div className="text-mono-metadata text-[var(--ink-muted)] flex items-center justify-between">
+                  <span>{t.mentions ? `${t.mentions} MENTIONS` : `${t.sourceCount || 1} SOURCES`}</span>
+                  <div className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider">
+                    {rightOnly && <span className="text-[var(--wire-red)]">RIGHT ONLY</span>}
+                    {leftOnly && <span className="text-[var(--wire-blue)]">LEFT ONLY</span>}
                   </div>
                 </div>
+                <h3 className="font-public-sans text-[15px] font-semibold leading-[1.4] text-[var(--ink)] group-hover:text-[var(--lens-cyan)] transition-colors line-clamp-3 mt-1">
+                  {t.name || t.title || t.headline}
+                </h3>
               </div>
             );
           })
         )}
       </div>
 
-      <div className="p-4 border-t border-white/10 flex justify-center">
+      <div className="p-4 border-t border-[var(--hairline)] flex justify-center bg-[var(--card-surface)]">
         <button
           onClick={() => setLocation("/blindspot")}
-          className="text-[10px] font-black uppercase tracking-widest text-white/50 hover:text-white transition-colors flex items-center justify-center gap-1 w-full"
+          className="text-mono-metadata hover:opacity-70 transition-opacity flex items-center justify-center gap-1 w-full"
         >
           FULL BLINDSPOT REPORT <ChevronRight className="w-3 h-3" />
         </button>

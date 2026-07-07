@@ -1,6 +1,19 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { MainNav } from "@/components/MainNav";
+import { Play, Pause, RefreshCw, Plus, Settings } from "lucide-react";
+import { api } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+
+interface AdminStatus {
+  isPaused: boolean;
+  fetchIntervalMs: number;
+  algorithmIntervalMs: number;
+  lastFetchTime: string | null;
+  totalArticlesEnqueued: number;
+  sourcesConfigured: number;
+  queueActive: boolean;
+}
 
 const apiFetch = (path: string) => fetch(path, { credentials: "include" }).then(r => r.json());
 
@@ -35,9 +48,11 @@ function SeverityBadge({ s }: { s: string }) {
 }
 
 export default function AdminDashboard() {
-  const [tab, setTab] = useState<"overview" | "fetch" | "worker" | "cluster" | "api" | "errors">("overview");
+  const [tab, setTab] = useState<"overview" | "engine" | "fetch" | "worker" | "cluster" | "api" | "errors">("overview");
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [newSource, setNewSource] = useState({ name: "", url: "", category: "World" });
   const qc = useQueryClient();
+  const { toast } = useToast();
 
   const { data, isLoading } = useQuery({
     queryKey: ["/api/admin/metrics"],
@@ -55,11 +70,34 @@ export default function AdminDashboard() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/admin/metrics"] }),
   });
 
+  const { data: status } = useQuery<AdminStatus>({
+    queryKey: ["/api/admin/fetcher"],
+    queryFn: api.admin.getStatus,
+    refetchInterval: autoRefresh ? 10000 : false,
+    refetchIntervalInBackground: false,
+  });
+
+  const updateConfig = useMutation({
+    mutationFn: (config: any) => api.admin.updateConfig(config),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/fetcher"] });
+      toast({ title: "Configuration Updated" });
+    }
+  });
+
+  const addSource = useMutation({
+    mutationFn: (source: any) => api.admin.addSource(source),
+    onSuccess: () => {
+      setNewSource({ name: "", url: "", category: "World" });
+      toast({ title: "Custom RSS Source Added" });
+    }
+  });
+
   if (isLoading) return <div className="min-h-screen bg-background"><MainNav /><div className="p-8 text-muted-foreground">Loading metrics...</div></div>;
   if (!data || data.error) return <div className="min-h-screen bg-background"><MainNav /><div className="p-8 text-red-500">Access denied or not logged in as admin.</div></div>;
 
   const { uptime, fetch: ft, worker, clustering, api: apiStats, schedulers, errors, memory, topStories, queueDepth } = data;
-  const tabs = ["overview", "fetch", "worker", "cluster", "api", "errors"] as const;
+  const tabs = ["overview", "engine", "fetch", "worker", "cluster", "api", "errors"] as const;
   const criticalCount = errors?.counts?.critical || 0;
   const activeErrors = errors?.active || [];
 
@@ -144,6 +182,130 @@ export default function AdminDashboard() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {tab === "engine" && status && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-card border border-border rounded-lg p-5 flex flex-col items-center justify-center text-center">
+                <div className="text-3xl font-bold font-serif mb-1">{status.totalArticlesEnqueued ?? 0}</div>
+                <div className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider">Articles Enqueued</div>
+              </div>
+              <div className="bg-card border border-border rounded-lg p-5 flex flex-col items-center justify-center text-center">
+                <div className="text-3xl font-bold font-serif mb-1">{status.sourcesConfigured ?? 0}</div>
+                <div className="text-[10px] text-green-600 uppercase font-semibold tracking-wider">Sources Configured</div>
+              </div>
+              <div className="bg-card border border-border rounded-lg p-5 flex flex-col items-center justify-center text-center">
+                <div className={`text-3xl font-bold font-serif mb-1 ${status.queueActive ? "text-green-600" : "text-red-600"}`}>
+                  {status.queueActive ? "ON" : "OFF"}
+                </div>
+                <div className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider">Queue Status</div>
+              </div>
+              <div className="bg-card border border-border rounded-lg p-5 flex flex-col items-center justify-center text-center">
+                <div className="text-xs font-bold font-serif mb-1 text-muted-foreground">
+                  {status.lastFetchTime ? new Date(status.lastFetchTime).toLocaleTimeString() : "Never"}
+                </div>
+                <div className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider">Last Fetch</div>
+              </div>
+            </div>
+
+            <div className="flex gap-4">
+              <button 
+                onClick={() => updateConfig.mutate({ isPaused: !status.isPaused })}
+                className={`flex-1 px-4 py-3 flex items-center justify-center gap-2 rounded-md font-medium text-sm transition-colors ${status.isPaused ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-red-600 text-white hover:bg-red-700'}`}
+              >
+                {status.isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                {status.isPaused ? "Resume Pipeline Engine" : "Pause Pipeline Engine"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-card border border-border rounded-lg overflow-hidden">
+                <div className="bg-muted/50 px-4 py-3 border-b border-border flex items-center gap-2">
+                  <Settings className="w-4 h-4" />
+                  <h2 className="font-semibold text-sm uppercase tracking-wider">Engine Tuning</h2>
+                </div>
+                <div className="p-4 space-y-6">
+                  <div>
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 block">Fast RSS Fetch Interval</label>
+                    <select 
+                      value={status.fetchIntervalMs}
+                      onChange={(e) => updateConfig.mutate({ fetchIntervalMs: parseInt(e.target.value) })}
+                      className="w-full bg-background border border-border px-3 py-2 rounded text-sm outline-none focus:border-primary"
+                    >
+                      <option value={10000}>10 Seconds (Aggressive)</option>
+                      <option value={30000}>30 Seconds (Fast)</option>
+                      <option value={60000}>1 Minute (Standard)</option>
+                      <option value={300000}>5 Minutes (Relaxed)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 block">Heavy AI Algorithm Interval</label>
+                    <select 
+                      value={status.algorithmIntervalMs}
+                      onChange={(e) => updateConfig.mutate({ algorithmIntervalMs: parseInt(e.target.value) })}
+                      className="w-full bg-background border border-border px-3 py-2 rounded text-sm outline-none focus:border-primary"
+                    >
+                      <option value={60 * 1000}>1 Minute (Local Testing only)</option>
+                      <option value={60 * 60 * 1000}>1 Hour (Standard)</option>
+                      <option value={6 * 60 * 60 * 1000}>6 Hours</option>
+                      <option value={12 * 60 * 60 * 1000}>12 Hours</option>
+                    </select>
+                    <p className="text-[11px] text-muted-foreground mt-3 leading-snug">
+                      Decoupling the computational AI Synthesis from simple RSS fetch prevents processing bottlenecks when handling massive volumes of data.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-card border border-border rounded-lg overflow-hidden">
+                <div className="bg-muted/50 px-4 py-3 border-b border-border flex items-center gap-2">
+                  <Plus className="w-4 h-4" />
+                  <h2 className="font-semibold text-sm uppercase tracking-wider">Inject Live Source</h2>
+                </div>
+                <div className="p-4 space-y-4">
+                  <div>
+                    <input 
+                      placeholder="Channel Name (e.g., TechCrunch)"
+                      value={newSource.name}
+                      onChange={e => setNewSource({...newSource, name: e.target.value})}
+                      className="w-full bg-background border border-border px-3 py-2 rounded text-sm mb-3 outline-none focus:border-primary"
+                    />
+                    <input 
+                      placeholder="RSS URL"
+                      value={newSource.url}
+                      onChange={e => setNewSource({...newSource, url: e.target.value})}
+                      className="w-full bg-background border border-border px-3 py-2 rounded text-sm mb-3 outline-none focus:border-primary"
+                    />
+                    <select 
+                      value={newSource.category}
+                      onChange={e => setNewSource({...newSource, category: e.target.value})}
+                      className="w-full bg-background border border-border px-3 py-2 rounded text-sm mb-4 outline-none focus:border-primary"
+                    >
+                      <option value="World">World</option>
+                      <option value="Technology">Technology</option>
+                      <option value="Business">Business</option>
+                      <option value="US">US Politics</option>
+                      <option value="Sports">Sports</option>
+                    </select>
+                    
+                    <button 
+                      onClick={() => {
+                        if(newSource.name && newSource.url) {
+                          addSource.mutate(newSource);
+                        }
+                      }}
+                      disabled={addSource.isPending || !newSource.name || !newSource.url}
+                      className="w-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 py-2 rounded font-medium text-sm flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50 transition-opacity"
+                    >
+                      {addSource.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                      Add Channel Globally
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

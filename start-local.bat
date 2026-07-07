@@ -91,7 +91,7 @@ if errorlevel 1 (
 REM Start Python Local Embedding Service
 echo.
 echo  [6/7] Starting Python Local Embedding Service (Port 5005) in a new window...
-start cmd /k "title Python Embeddings && if not exist venv (python -m venv venv && call venv\Scripts\activate && pip install -r requirements.txt) else (call venv\Scripts\activate) && python server/embedding_service.py"
+start cmd /k "title Python Embeddings && if not exist venv (python -m venv venv && call venv\Scripts\activate && pip install -r services\embeddings\requirements.txt) else (call venv\Scripts\activate) && cd services\embeddings && uvicorn main:app --port 5005"
 
 REM Start Node Worker
 echo.

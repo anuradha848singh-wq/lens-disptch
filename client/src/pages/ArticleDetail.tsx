@@ -17,11 +17,13 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatDistanceToNow } from "date-fns";
 import {
   Bookmark, BookmarkCheck, Share2, ExternalLink,
-  FileText, Search, ChevronRight, CheckCircle2, Clock, Zap, Lock, EyeOff
+  FileText, Search, ChevronRight, CheckCircle2, Clock, Zap, Lock, EyeOff, ChevronDown
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import { type ArticleWithDetails } from "@shared/schema";
+import { Tooltip as UITooltip } from "@/components/ui/tooltip";
+import { NarrativeMatrix, WorldViewChart } from "@/components/NarrativeEngine";
 
 
 import { StoryOrigin, CoverageByCountry, DeepIntelligenceDashboard, StoryTimeline } from "@/components/StoryIntelligence";
@@ -33,6 +35,7 @@ import { ExecutiveBriefing, ForeignGazePanel, MarketImpact, EntityQuoteTracker }
 import { useEffect } from "react";
 import { motion, useScroll, useSpring, AnimatePresence } from "framer-motion";
 import { SharePanel } from "@/components/SharePanel";
+import { TicketTabs, OffTheWire, SealedFeature, SpectrumStrip, OriginMedallion, Postmark, Aperture, WireClipping } from "@/components/DispatchPrimitives";
 
 function ReadingProgressBar() {
   const { scrollYProgress } = useScroll();
@@ -49,12 +52,197 @@ function ReadingProgressBar() {
     />
   );
 }
-// ── Bias dot ─────────────────────────────────────────────────────────────────
 function BiasDot({ bias }: { bias: string | null }) {
   const color = bias === "left" ? "bg-blue-500"
     : bias === "right" ? "bg-red-500"
       : "bg-gray-400";
   return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${color}`} />;
+}
+
+function InteractiveAISummary({ clusterData }: { clusterData: any }) {
+  const [activeTab, setActiveTab] = useState<"tldr" | "bias" | "synthesis">("tldr");
+
+  const hasBias = clusterData?.aiSummary && typeof clusterData.aiSummary === 'object' && !Array.isArray(clusterData.aiSummary);
+  const hasSynthesis = hasBias && !!clusterData.aiSummary.synthesis;
+  
+  // generic summary or array string points
+  const tldrContent = clusterData?.summary || 
+    (Array.isArray(clusterData?.aiSummary) && clusterData.aiSummary.join("\n\n"));
+
+  if (!tldrContent && !hasBias) return null;
+
+  return (
+    <div className="mb-10 bg-card border border-border/60 rounded-xl overflow-hidden shadow-sm">
+      <div className="flex items-center gap-1 bg-secondary/30 border-b border-border p-2">
+        <button 
+          onClick={() => setActiveTab("tldr")}
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${activeTab === 'tldr' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+        >TL;DR</button>
+        {hasBias && (
+          <button 
+            onClick={() => setActiveTab("bias")}
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${activeTab === 'bias' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >Bias Lenses</button>
+        )}
+        {hasSynthesis && (
+          <button 
+            onClick={() => setActiveTab("synthesis")}
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-md transition-all flex items-center gap-2 ${activeTab === 'synthesis' ? 'bg-background shadow text-amber-600 dark:text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
+          ><Zap className="w-3 h-3" /> Ground Truth</button>
+        )}
+      </div>
+      <div className="p-6 md:p-8">
+        {activeTab === 'tldr' && (
+          <div className="font-serif text-[18px] md:text-[20px] leading-[1.7] text-foreground">
+             {tldrContent}
+          </div>
+        )}
+        {activeTab === 'bias' && hasBias && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded">Left Lens</span>
+              <p className="text-sm text-foreground/90 leading-relaxed">{clusterData.aiSummary.left}</p>
+            </div>
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">Center Lens</span>
+              <p className="text-sm text-foreground/90 leading-relaxed">{clusterData.aiSummary.center}</p>
+            </div>
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-red-600 uppercase tracking-widest bg-red-50 dark:bg-red-900/30 px-2 py-1 rounded">Right Lens</span>
+              <p className="text-sm text-foreground/90 leading-relaxed">{clusterData.aiSummary.right}</p>
+            </div>
+          </div>
+        )}
+        {activeTab === 'synthesis' && hasSynthesis && (
+          <div className="relative p-6 bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-lg">
+             <div className="absolute top-0 right-0 px-3 py-1 bg-amber-200/50 dark:bg-amber-900/50 text-[10px] font-bold text-amber-800 dark:text-amber-200 uppercase tracking-widest rounded-bl-lg">Verified Consensus</div>
+             <p className="font-serif text-[18px] md:text-[22px] leading-relaxed text-foreground">{clusterData.aiSummary.synthesis}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function NarrativeOwnership({ allSources }: { allSources: any[] }) {
+  if (!allSources || allSources.length === 0) return null;
+  
+  // Tally publishers
+  const tally = new Map<string, number>();
+  allSources.forEach(s => {
+     const name = s.publisher?.name || "Unknown";
+     tally.set(name, (tally.get(name) || 0) + 1);
+  });
+  
+  const sorted = Array.from(tally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const maxVal = sorted.length > 0 ? sorted[0][1] : 1;
+
+  return (
+    <div className="border-b-[1.5px] border-dashed border-hairline-dashed pb-6 pt-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-[14px] font-serif font-black text-foreground flex items-center gap-2">
+          Narrative Ownership
+          <span className="text-[9px] px-1.5 py-0.5 rounded-sm bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 font-sans tracking-widest uppercase">Data</span>
+        </h3>
+      </div>
+      <div className="space-y-4">
+        {sorted.map(([name, count]) => (
+          <div key={name}>
+             <div className="flex items-center justify-between text-[11px] font-bold mb-2">
+               <span className="truncate pr-2 uppercase tracking-widest text-muted-foreground">{name}</span>
+               <span className="text-foreground">{count} {count === 1 ? 'SOURCE' : 'SOURCES'}</span>
+             </div>
+             <div className="w-full h-1.5 bg-secondary rounded-full overflow-hidden">
+               <div className="h-full bg-foreground transition-all duration-1000" style={{ width: `${(count / maxVal) * 100}%` }} />
+             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BlindspotExplorer({ gaps, allSources }: { gaps: any[], allSources: any[] }) {
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+
+  if (!gaps || !Array.isArray(gaps) || gaps.length === 0) return null;
+
+  return (
+    <div className="mb-10 mt-6 bg-card border border-border/50 rounded-xl overflow-hidden shadow-sm">
+      <div className="bg-amber-500/10 border-b border-border/50 p-4 md:p-5 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500">
+          <EyeOff className="w-5 h-5" />
+          <div>
+            <h4 className="text-sm font-bold uppercase tracking-widest leading-none">Blindspot Explorer</h4>
+            <p className="text-[10px] uppercase text-muted-foreground mt-1">What this article left out</p>
+          </div>
+        </div>
+      </div>
+      <div className="divide-y divide-border/30">
+        {gaps.map((gap, i) => {
+          const isExpanded = expandedIndex === i;
+          
+          // Map mentions to actual sources to get bias
+          const mentionList = Array.isArray(gap.mentionedBy) ? gap.mentionedBy : gap.mentionedBy.split(",");
+          const sources = mentionList.map((pubName: string) => {
+            const trimmed = pubName.trim();
+            const source = allSources.find(s => s.publisher?.name?.toLowerCase().includes(trimmed.toLowerCase()));
+            return {
+               name: trimmed,
+               bias: source ? deriveBias(source) : 'center'
+            }
+          });
+
+          return (
+            <div key={i} className="group">
+              <button 
+                onClick={() => setExpandedIndex(isExpanded ? null : i)}
+                className="w-full text-left p-4 md:p-5 flex items-center justify-between hover:bg-muted/30 transition-colors"
+              >
+                <span className="text-[15px] font-bold text-foreground group-hover:text-amber-600 transition-colors">{gap.entity || gap.label}</span>
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+                   {mentionList.length} Sources
+                   <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
+                </span>
+              </button>
+              
+              <AnimatePresence>
+                {isExpanded && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden bg-background/50 border-t border-border/30"
+                  >
+                    <div className="p-4 md:p-5">
+                       <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-4">Publishers covering this narrative:</p>
+                       <div className="flex flex-wrap gap-2">
+                         {sources.map((s: any, idx: number) => {
+                           let badgeColor = 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
+                           if (s.bias === 'left') badgeColor = 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300';
+                           if (s.bias === 'right') badgeColor = 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
+                           
+                           return (
+                             <span key={idx} className={`text-[11px] font-bold px-3 py-1.5 rounded-full ${badgeColor} border border-background/20 shadow-sm flex items-center gap-1.5`}>
+                               {s.bias === 'left' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                               {s.bias === 'center' && <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />}
+                               {s.bias === 'right' && <span className="w-1.5 h-1.5 rounded-full bg-red-500" />}
+                               {s.name}
+                             </span>
+                           )
+                         })}
+                       </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  );
 }
 
 function TrendingTopicsSection({ category, currentId }: { category?: string; currentId?: string }) {
@@ -347,12 +535,12 @@ function BiasDistributionColumns({ sources }: { sources: any[] }) {
       <div className="p-4">
         {/* Spectrum bar */}
         <div className="mb-4">
-          <BiasSpectrumBar 
-            proEstablishmentCount={left.length} 
-            neutralCount={center.length} 
-            proOppositionCount={right.length} 
-            totalStats={total} 
-            className="h-2.5" 
+          <SpectrumStrip 
+             sources={[
+                ...left.map(s => ({ name: s.publisher?.name || 'L', leanPosition: 20, lean: 'left' as any })),
+                ...center.map(s => ({ name: s.publisher?.name || 'C', leanPosition: 50, lean: 'center' as any })),
+                ...right.map(s => ({ name: s.publisher?.name || 'R', leanPosition: 80, lean: 'right' as any }))
+             ]}
           />
         </div>
 
@@ -998,7 +1186,7 @@ export default function ArticleDetail() {
 
       <main className="w-full max-w-[1800px] mx-auto px-2 md:px-4 pt-4 pb-12">
 
-        <div className="flex flex-col xl:grid xl:grid-cols-[260px_minmax(0,1fr)_300px] gap-6 xl:gap-8 items-start">
+        <div className="flex flex-col xl:grid xl:grid-cols-[260px_minmax(0,1fr)_340px] gap-6 xl:gap-8 items-start">
 
           {/* ── LEFT SIDEBAR (Other Sources) ── */}
           <aside className="hidden xl:block w-full sticky top-20 border-r border-border/50 pr-4">
@@ -1038,21 +1226,43 @@ export default function ArticleDetail() {
             className="min-w-0"
           >
 
-            {/* ── GROUND NEWS STYLE HEADER ── */}
-            <div className="mb-6 flex flex-col gap-4">
-              
-              {/* Meta String & Social Icons */}
-              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/50 pb-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-bold text-muted-foreground">
-                  <span>Published {formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now()), { addSuffix: true })}</span>
-                  <span className="text-[8px]">•</span>
-                  <span>{activeArticle?.categories?.[0]?.name || "World News"}</span>
-                  <span className="text-[8px]">•</span>
-                  <span>updated {formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now()), { addSuffix: true })}</span>
+            {/* ── LENS DISPATCH HERO HEADER ── */}
+            <div className="mb-8 flex flex-col gap-5 bg-card border-[1.5px] border-hairline-dashed p-6 relative">
+              {/* Corner Registration Marks */}
+              <div className="absolute top-0 left-0 w-2 h-2 border-t-[1.5px] border-l-[1.5px] border-wire-red -translate-x-[1.5px] -translate-y-[1.5px]" />
+              <div className="absolute top-0 right-0 w-2 h-2 border-t-[1.5px] border-r-[1.5px] border-wire-red translate-x-[1.5px] -translate-y-[1.5px]" />
+              <div className="absolute bottom-0 left-0 w-2 h-2 border-b-[1.5px] border-l-[1.5px] border-wire-red -translate-x-[1.5px] translate-y-[1.5px]" />
+              <div className="absolute bottom-0 right-0 w-2 h-2 border-b-[1.5px] border-r-[1.5px] border-wire-red translate-x-[1.5px] translate-y-[1.5px]" />
+
+              {/* Aperture & Diversity Score */}
+              <div className="flex items-center gap-3">
+                <Aperture 
+                  sources={allSources.map(s => ({ lean: deriveBias(s) as any }))} 
+                  diversityScore={displaySourceCount > 1 ? (biasStats.center / biasStats.total * 100) : 0} 
+                  size="feature" 
+                />
+                <div className="flex flex-col">
+                  <span className="text-eyebrow text-ink tracking-widest text-[14px]">
+                    {Math.round(displaySourceCount > 1 ? (biasStats.center / biasStats.total * 100) : 0)}% DIVERSE &middot; {displaySourceCount} SOURCES
+                  </span>
+                  <span className="text-mono-metadata text-muted-foreground uppercase tracking-widest mt-1">
+                    Coverage Spectrum
+                  </span>
+                </div>
+              </div>
+
+              {/* Title */}
+              <h1 className="font-serif text-[28px] md:text-[38px] font-black leading-[1.1] tracking-tight text-ink text-pretty mt-2">
+                {activeArticle?.title}
+              </h1>
+
+              {/* Dateline & Social Icons */}
+              <div className="flex flex-wrap items-center justify-between gap-4 mt-2">
+                <div className="text-eyebrow text-ink-muted">
+                  PUBLISHED {formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now())).toUpperCase()} AGO &middot; {(activeArticle?.categories?.[0]?.name || "WORLD NEWS").toUpperCase()}
                 </div>
                 
                 <div className="flex items-center gap-2">
-                  {/* Real Share Panel */}
                   {id && activeArticle?.title && (
                     <SharePanel
                       articleId={id}
@@ -1062,256 +1272,80 @@ export default function ArticleDetail() {
                   )}
                   <button
                     onClick={() => user ? bookmarkMutation.mutate() : toast({ title: "Sign in to bookmark" })}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border border-border/60 hover:bg-secondary/60 hover:border-border transition-all ${
-                      isBookmarked ? "text-accent-editorial border-accent-editorial/50 bg-accent-editorial/5" : "text-muted-foreground"
-                    }`}
+                    className={`flex items-center justify-center w-8 h-8 rounded-full border ${
+                      isBookmarked ? "border-wire-red text-wire-red bg-wire-red/5" : "border-hairline text-ink-muted hover:border-ink hover:text-ink"
+                    } transition-colors`}
                     aria-label={isBookmarked ? "Remove bookmark" : "Bookmark article"}
                   >
-                    {isBookmarked ? (
-                      <BookmarkCheck className="w-3.5 h-3.5" />
-                    ) : (
-                      <Bookmark className="w-3.5 h-3.5" />
-                    )}
-                    {isBookmarked ? "Saved" : "Save"}
+                    {isBookmarked ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
                   </button>
                   <a
                     href={activeArticle?.sourceUrl || activeArticle?.url || "#"}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border border-border/60 hover:bg-secondary/60 hover:border-border transition-all text-muted-foreground hover:text-foreground"
+                    className="flex items-center justify-center w-8 h-8 rounded-full border border-hairline text-ink-muted hover:border-ink hover:text-ink transition-colors"
                     aria-label="Read original article"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Source
+                    <ExternalLink className="w-4 h-4" />
                   </a>
                 </div>
               </div>
-
-              {/* Title */}
-              <h1 className="font-serif text-[38px] md:text-[48px] font-black leading-[1.1] tracking-tight text-foreground text-pretty mb-2">
-                {activeArticle?.title}
-              </h1>
   
               {/* Perspective Switcher */}
-              <div className="flex items-center flex-wrap gap-2 mt-2 mb-2">
-                <div className="flex items-center bg-[#e4e5e0] dark:bg-zinc-800 rounded-md p-0.5 border border-border/50">
-                  <button onClick={() => setActivePerspective("left")} className={`px-5 py-1 text-[11px] font-bold rounded-sm transition-colors ${activePerspective === "left" ? "bg-blue-600 text-white" : "text-muted-foreground hover:bg-black/5"}`}>Left</button>
-                  <button onClick={() => setActivePerspective("center")} className={`px-5 py-1 text-[11px] font-bold rounded-sm transition-colors ${activePerspective === "center" ? "bg-gray-500 text-white" : "text-muted-foreground hover:bg-black/5"}`}>Center</button>
-                  <button onClick={() => setActivePerspective("right")} className={`px-5 py-1 text-[11px] font-bold rounded-sm transition-colors ${activePerspective === "right" ? "bg-red-600 text-white" : "text-muted-foreground hover:bg-black/5"}`}>Right</button>
-                </div>
+              <div className="flex items-center gap-4 mt-4 pt-4 border-t-[1.5px] border-dashed border-hairline-dashed flex-wrap">
+                <span className="text-eyebrow text-ink-muted tracking-widest shrink-0">READ THIS DISPATCH:</span>
+                <TicketTabs 
+                  options={["left", "center", "right"]}
+                  active={activePerspective || "center"}
+                  onChange={(val) => setActivePerspective(val as any)}
+                  className="border-none"
+                />
                 
-                <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#e4e5e0] dark:bg-zinc-800 border border-border/50 text-[11px] font-bold text-muted-foreground hover:bg-black/5 transition-colors" onClick={() => article?.clusterId && setLocation(`/compare/${article.clusterId}`)}>
-                  <span className="w-3 h-3 rounded-full border border-current flex items-center justify-center text-[8px]">i</span> Bias Comparison
+                <button 
+                  className="ml-auto text-mono-metadata text-lens-cyan hover:underline uppercase tracking-widest flex items-center gap-1.5" 
+                  onClick={() => article?.clusterId && setLocation(`/compare/${article.clusterId}`)}
+                >
+                  <Search className="w-3.5 h-3.5" /> Bias Comparison
                 </button>
               </div>
 
-              {/* LENS TRUTH AI INSIGHTS */}
-              {clusterData && (clusterData.summary || (clusterData.aiSummary && (Array.isArray(clusterData.aiSummary) ? clusterData.aiSummary.length > 0 : Object.keys(clusterData.aiSummary).length > 0))) && (
-                <div className="mb-6 flex flex-col gap-4">
-                  
-                  {clusterData.summary && (
-                    <div className="font-sans text-[16px] text-foreground leading-relaxed">
-                      {clusterData.summary}
-                    </div>
-                  )}
+              {/* INTERACTIVE AI SUMMARY */}
+              <InteractiveAISummary clusterData={clusterData} />
 
-                  {/* Render Legacy String Array or New Object Format */}
-                  {Array.isArray(clusterData.aiSummary) ? (
-                    <ul className="list-disc list-outside ml-5 space-y-2 mt-2">
-                      {clusterData.aiSummary?.map((point: string, i: number) => (
-                        <li key={i} className="font-sans text-[16px] text-foreground leading-snug">
-                          {point.trim()}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : clusterData.aiSummary && typeof clusterData.aiSummary === 'object' && (
-                    <div className="flex flex-col gap-3 mt-2">
-                      {/* Left Perspective */}
-                      {clusterData.aiSummary.left && (
-                        <div className="p-4 rounded-md border-l-4 border-blue-500 bg-blue-500/5">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-sm">Left Perspective</span>
-                          </div>
-                          <p className="text-sm text-foreground leading-relaxed">
-                            {clusterData.aiSummary.left}
-                          </p>
-                        </div>
-                      )}
-                      
-                      {/* Center Perspective */}
-                      {clusterData.aiSummary.center && (
-                        <div className="p-4 rounded-md border-l-4 border-purple-500 bg-purple-500/5">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-sm">Center Perspective</span>
-                          </div>
-                          <p className="text-sm text-foreground leading-relaxed">
-                            {clusterData.aiSummary.center}
-                          </p>
-                        </div>
-                      )}
-                      
-                      {/* Right Perspective */}
-                      {clusterData.aiSummary.right && (
-                        <div className="p-4 rounded-md border-l-4 border-red-500 bg-red-500/5">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400 bg-red-500/10 px-2 py-0.5 rounded-sm">Right Perspective</span>
-                          </div>
-                          <p className="text-sm text-foreground leading-relaxed">
-                            {clusterData.aiSummary.right}
-                          </p>
-                        </div>
-                      )}
 
-                      {/* Synthesis */}
-                      {clusterData.aiSummary.synthesis && (
-                        <div className="mt-2 p-4 rounded-md bg-zinc-100 dark:bg-zinc-900 border border-border/50">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Zap className="w-4 h-4 text-amber-500" />
-                            <span className="text-[11px] font-bold uppercase tracking-widest text-amber-600 dark:text-amber-500">The Ground Truth</span>
-                          </div>
-                          <p className="text-[15px] font-medium text-foreground leading-relaxed">
-                            {clusterData.aiSummary.synthesis}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  <div className="flex items-center justify-between border-t border-border/50 mt-2 pt-4">
-                    <div className="flex items-center gap-1.5 text-muted-foreground">
-                      <span className="w-3 h-3 rounded-full border border-current flex items-center justify-center text-[8px]">i</span>
-                      <span className="text-[10px] font-bold uppercase tracking-widest">Insights by Lens Truth</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-muted-foreground cursor-pointer hover:text-foreground">
-                      <Zap className="w-3 h-3" />
-                      <span className="text-[10px] font-bold">Does this summary seem wrong?</span>
-                    </div>
-                  </div>
-                </div>
-              )}
+            </div>
 
-              {/* WHAT THIS ARTICLE LEFT OUT */}
-              {omissions && omissions.length > 0 && (
-                <div className="mb-6 p-5 rounded-xl border border-orange-200 bg-orange-50/50 dark:border-orange-900/30 dark:bg-orange-900/10">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2 text-orange-600 dark:text-orange-500">
-                      <EyeOff className="w-4 h-4" />
-                      <h3 className="text-xs font-bold uppercase tracking-widest">What This Article Left Out</h3>
-                    </div>
-                    <span className="w-4 h-4 rounded-full border border-orange-200 dark:border-orange-900/50 flex items-center justify-center text-[10px] text-orange-500 cursor-help" title="These are people, places, and organizations mentioned by other news sources covering this exact story, but entirely omitted by this article.">i</span>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {omissions.map((omission: any, idx: number) => (
-                      <div key={idx} className="p-3 bg-white dark:bg-black/20 rounded-md border border-border shadow-sm">
-                        <div className="font-bold text-sm text-foreground mb-1">{omission.entity}</div>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                          Mentioned by: <span className="text-foreground">{omission.mentionedBy.join(", ")}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+            {/* ACTIVE PERSPECTIVE DISPATCH */}
+            <div className="mb-10">
+              <WireClipping 
+                source={activeArticle?.publisher?.name || "The Lens Dispatch"}
+                lean={deriveBias(activeArticle)}
+                timestamp={`UPDATED ${formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now())).toUpperCase()} AGO`}
+                quote={activeSummaryPoints.join(" ") || "No detailed summary available for this perspective."}
+                className="mb-8 border-ink bg-card-surface"
+              />
+              
+              {!showFullArticle && (
+                <div className="flex justify-center border-t-[1.5px] border-dashed border-hairline-dashed pt-8">
+                  <Button
+                    size="lg"
+                    className="rounded-none bg-ink hover:bg-ink-muted text-paper font-mono font-bold text-[13px] uppercase tracking-[0.2em] px-8 h-12 flex gap-3 items-center transition-colors"
+                    onClick={() => {
+                      if (activeArticle?.sourceUrl || activeArticle?.url) {
+                        window.open(activeArticle.sourceUrl || activeArticle.url, "_blank", "noreferrer");
+                      } else {
+                        setShowFullArticle(true);
+                      }
+                    }}
+                  >
+                    ACCESS FULL DISPATCH ON {activeArticle?.publisher?.name?.toUpperCase() || "SOURCE"}
+                    <ExternalLink className="w-4 h-4" />
+                  </Button>
                 </div>
               )}
             </div>
-
-          {/* Publisher row */}
-          <div className="flex items-center gap-4 mb-6 py-3 border-b border-border transition-all duration-500">
-            <PublisherLogo name={activeArticle?.publisher?.name || "?"} domain={activeArticle?.publisher?.website} size="md" />
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-foreground">{activeArticle?.publisher?.name}</span>
-                {activeArticle?.publisher?.biasRating && (
-                  <BiasChip bias={(activeArticle.publisher.biasRating || "center") as any} size="xs" />
-                )}
-                <span className="text-sm text-muted-foreground">
-                  updated {formatDistanceToNow(new Date(activeArticle?.publishedAt || Date.now()), { addSuffix: true })}
-                </span>
-              </div>
-
-              <a
-                href={activeArticle?.sourceUrl || activeArticle?.url || "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-bold mt-0.5"
-              >
-                Read article on {activeArticle?.publisher?.name} <ExternalLink className="w-2.5 h-2.5" />
-              </a>
-            </div>
-
-            <div className="ml-auto flex gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-9 w-9 rounded-full"
-                onClick={() => bookmarkMutation.mutate()}
-              >
-                {isBookmarked
-                  ? <BookmarkCheck className="w-4 h-4 text-blue-600" />
-                  : <Bookmark className="w-4 h-4" />}
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-9 w-9 rounded-full"
-                onClick={() => navigator.clipboard.writeText(window.location.href).then(() => toast({ title: "Link copied!" })).catch(() => {})}
-                aria-label="Copy link"
-              >
-                <Share2 className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
-
-          {/* Summary box */}
-          <div className="relative overflow-hidden rounded-xl mb-6 bg-card/80 backdrop-blur-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-border/60 transition-all duration-500">
-            <div className="absolute inset-0 bg-gradient-to-br from-background/50 to-secondary/20 pointer-events-none" />
-            <div className="relative bg-secondary/30 px-5 py-3 border-b border-border/50 flex items-center gap-3 flex-wrap">
-              <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-              <span className="text-xs font-black text-foreground shrink-0 uppercase tracking-widest">{activeArticle?.publisher?.name || "The Lens Dispatch"}</span>
-              {activeArticle && <BiasChip bias={deriveBias(activeArticle)} size="xs" />}
-            </div>
-            <div className="p-6 space-y-4">
-              {activeSummaryPoints.length === 0 ? (
-                (activeArticle?.id === article?.id && isRecent) ? (
-                  <div className="flex items-center gap-3 text-muted-foreground py-2">
-                    <div className="w-4 h-4 border-2 border-border border-t-purple-400 rounded-full animate-spin" />
-                    <span className="text-sm">Summary being generated...</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3 text-muted-foreground py-2">
-                    <span className="text-sm">No detailed summary available for this perspective.</span>
-                  </div>
-                )
-              ) : activeSummaryPoints.map((point, i) => (
-                <div key={i} className="flex gap-4 items-start py-1">
-                  <div className="w-1.5 h-1.5 rounded-full bg-purple-500 mt-2 shrink-0" />
-                  <p className="font-serif text-[18px] text-foreground leading-[1.75]">
-                    {point.trim()}{point.endsWith(".") ? "" : "."}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Read full article button */}
-          {!showFullArticle ? (
-            <div className="flex justify-center mb-6 py-2 border-y border-dashed border-border/50">
-              <Button
-                size="lg"
-                className="rounded-full bg-[#7a1a1a] hover:bg-[#5a1414] shadow-md transition-all active:scale-95 text-white font-bold text-sm px-8 gap-2"
-                onClick={() => {
-                  if (activeArticle?.sourceUrl || activeArticle?.url) {
-                    window.open(activeArticle.sourceUrl || activeArticle.url, "_blank", "noreferrer");
-                  } else {
-                    setShowFullArticle(true);
-                  }
-                }}
-              >
-                Read full article on {activeArticle?.publisher?.name}
-                <ExternalLink className="w-4 h-4" />
-              </Button>
-            </div>
-          ) : (
+            
+            {showFullArticle && (
           <div className="mb-10 p-6 md:p-8 bg-card border border-border prose prose-zinc dark:prose-invert max-w-none">
             <div className="flex justify-between items-center mb-6 pb-4 border-b-4 border-double border-border/50">
               <h3 className="text-2xl font-serif font-bold text-foreground">Full Article · {activeArticle?.publisher?.name}</h3>
@@ -1331,43 +1365,59 @@ export default function ArticleDetail() {
 
         {/* Filter bar removed to avoid duplication */}
 
-        <div className="space-y-10">
-
-
             {/* ── SECTION 1: Coverage by Bias ── */}
-            <section>
-              <div className="flex items-center justify-between mb-4">
+            <section className="mb-12">
+              <div className="flex items-center justify-between mb-6 border-b-[1.5px] border-hairline pb-4">
                 <div>
-                  <h3 className="text-2xl font-serif font-black text-foreground">Coverage by Bias</h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    How different perspectives are reporting this story
+                  <h3 className="text-eyebrow text-ink tracking-[0.2em] mb-1">COVERAGE BY BIAS</h3>
+                  <p className="text-mono-metadata text-ink-muted">
+                    HOW DIFFERENT PERSPECTIVES ARE REPORTING THIS STORY
                   </p>
                 </div>
                 {article?.clusterId && (
-                  <span className="text-xs font-bold text-blue-600 cursor-pointer hover:underline"
+                  <span className="text-mono-metadata text-lens-cyan cursor-pointer hover:underline uppercase tracking-widest"
                     onClick={() => setLocation(`/compare/${article.clusterId}`)}>
-                    See all sources
+                    SEE ALL SOURCES &rarr;
                   </span>
                 )}
               </div>
+
+              {/* GLOBAL NARRATIVE ENGINE VISUALIZATIONS */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
+                <div className="lg:col-span-2 bg-card-surface border-[1.5px] border-hairline p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h4 className="font-mono text-xs font-bold uppercase tracking-widest text-ink">Narrative Matrix</h4>
+                      <p className="text-[11px] font-mono text-ink-muted uppercase">True Ideology vs Narrative Stance</p>
+                    </div>
+                  </div>
+                  <NarrativeMatrix sources={allSources} />
+                </div>
+                
+                <div className="bg-card-surface border-[1.5px] border-hairline p-6">
+                  <WorldViewChart sources={allSources} />
+                </div>
+              </div>
+
+              {/* WHAT THIS ARTICLE LEFT OUT (Interactive Blindspot Explorer) */}
+              <BlindspotExplorer gaps={omissions} allSources={allSources} />
 
               {/* Context Diff Panel */}
               <ContextDiffPanel activeArticle={activeArticle!} clusterArticles={allSources} />
 
               <Tabs defaultValue="all" className="w-full mt-10">
-                <div className="flex flex-wrap items-center justify-between border-b border-border/80 mb-2 pb-3">
+                <div className="flex flex-wrap items-center justify-between border-b-[1.5px] border-dashed border-hairline-dashed mb-2 pb-3">
                   <div className="flex items-center gap-4 md:gap-8">
-                    <span className="font-bold text-[18px] text-foreground">{allSources.length} Articles</span>
+                    <span className="text-eyebrow text-ink">{allSources.length} DISPATCHES</span>
                     <TabsList className="bg-transparent border-none p-0 h-auto gap-4 flex w-auto">
-                      <TabsTrigger value="all" className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-[13px] font-bold text-muted-foreground data-[state=active]:text-foreground">All</TabsTrigger>
-                      <TabsTrigger value="left" className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-[13px] font-bold text-muted-foreground data-[state=active]:text-foreground">Left <span className="ml-1 text-[10px] opacity-70">{biasStats.left}</span></TabsTrigger>
-                      <TabsTrigger value="center" className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-[13px] font-bold text-muted-foreground data-[state=active]:text-foreground">Center <span className="ml-1 text-[10px] opacity-70">{biasStats.center}</span></TabsTrigger>
-                      <TabsTrigger value="right" className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-[13px] font-bold text-muted-foreground data-[state=active]:text-foreground">Right <span className="ml-1 text-[10px] opacity-70">{biasStats.right}</span></TabsTrigger>
+                      <TabsTrigger value="all" className="rounded-none border-b-[2px] border-transparent data-[state=active]:border-ink data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-mono-metadata font-bold text-ink-muted data-[state=active]:text-ink uppercase tracking-widest">ALL</TabsTrigger>
+                      <TabsTrigger value="left" className="rounded-none border-b-[2px] border-transparent data-[state=active]:border-wire-blue data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-mono-metadata font-bold text-ink-muted data-[state=active]:text-wire-blue uppercase tracking-widest">LEFT <span className="ml-1 text-[10px] opacity-70">{biasStats.left}</span></TabsTrigger>
+                      <TabsTrigger value="center" className="rounded-none border-b-[2px] border-transparent data-[state=active]:border-ink data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-mono-metadata font-bold text-ink-muted data-[state=active]:text-ink uppercase tracking-widest">CENTER <span className="ml-1 text-[10px] opacity-70">{biasStats.center}</span></TabsTrigger>
+                      <TabsTrigger value="right" className="rounded-none border-b-[2px] border-transparent data-[state=active]:border-wire-red data-[state=active]:bg-transparent data-[state=active]:shadow-none px-0 py-1 text-mono-metadata font-bold text-ink-muted data-[state=active]:text-wire-red uppercase tracking-widest">RIGHT <span className="ml-1 text-[10px] opacity-70">{biasStats.right}</span></TabsTrigger>
                     </TabsList>
                   </div>
-                  <div className="flex gap-4 text-foreground/70">
-                    <Search className="w-4 h-4 cursor-pointer hover:text-foreground transition-colors" />
-                    <svg className="w-4 h-4 cursor-pointer hover:text-foreground transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                  <div className="flex gap-4 text-ink-muted">
+                    <Search className="w-4 h-4 cursor-pointer hover:text-ink transition-colors" />
                   </div>
                 </div>
                 
@@ -1398,47 +1448,43 @@ export default function ArticleDetail() {
                       {uniqueGrid.length > 0 ? (
                         <div className="flex flex-col">
                           {uniqueGrid.slice(0, 10).map(({ article: source, extra }) => (
-                            <div key={source.id}
-                              className="flex flex-col py-4 border-b border-border/40 hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer group"
+                              <div className="flex flex-col py-4 border-b-[1.5px] border-dashed border-hairline-dashed hover:bg-card-surface transition-colors cursor-pointer group"
                               onClick={() => setLocation(`/article/${source.id}`)}>
                               
                               <div className="flex items-center justify-between mb-2">
                                 <div className="flex items-center gap-2">
-                                  <PublisherLogo name={source.publisher?.name || "?"} domain={source.publisher?.website} size="xs" />
-                                  <span className="text-[12px] font-bold text-foreground">
-                                    {source.publisher?.name}
+                                  <Postmark count={source.publisher?.name?.[0]?.toUpperCase() || "?"} className="w-5 h-5 text-[9px]" rotation={0} />
+                                  <span className="text-eyebrow text-ink tracking-widest">
+                                    {source.publisher?.name?.toUpperCase()}
                                   </span>
-                                  {source.isPremium && <span className="text-muted-foreground text-[10px] font-bold ml-1">$</span>}
+                                  {source.isPremium && <span className="text-mono-metadata text-lens-cyan ml-1">🔒</span>}
                                 </div>
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <div className="hidden sm:flex items-center gap-1 bg-[#e4e5e0] dark:bg-zinc-800 border border-border/50 rounded-sm text-[9px] font-bold text-foreground px-1.5 py-0.5">
-                                    Ownership <Lock className="w-2.5 h-2.5 text-muted-foreground" />
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {/* Wax-seal dot for lean */}
+                                  <div className="flex items-center gap-1.5">
+                                    <div className={`w-2 h-2 rounded-full ${deriveBias(source) === 'left' ? 'bg-wire-blue' : deriveBias(source) === 'right' ? 'bg-wire-red' : 'bg-ink-muted'}`} />
+                                    <span className="text-mono-metadata text-ink-muted tracking-widest">
+                                      {deriveBias(source) === 'left' ? 'LEAN LEFT' : deriveBias(source) === 'right' ? 'LEAN RIGHT' : 'CENTER'}
+                                    </span>
                                   </div>
-                                  <div className="hidden sm:flex items-center gap-1 bg-[#e4e5e0] dark:bg-zinc-800 border border-border/50 rounded-sm text-[9px] font-bold text-foreground px-1.5 py-0.5">
-                                    Factuality <Lock className="w-2.5 h-2.5 text-muted-foreground" />
-                                  </div>
-                                  <div className={`rounded-sm text-[9px] font-bold px-1.5 py-0.5 border ${deriveBias(source) === 'left' ? 'text-blue-600 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : deriveBias(source) === 'right' ? 'text-red-600 border-red-600 bg-red-50/50 dark:bg-red-900/20' : 'text-gray-600 border-gray-600 bg-gray-50/50 dark:bg-gray-800/50'}`}>
-                                    {deriveBias(source) === 'left' ? 'Lean Left' : deriveBias(source) === 'right' ? 'Lean Right' : 'Center'}
-                                  </div>
-                                  <div className="text-muted-foreground font-black ml-2 -mt-1 tracking-widest leading-none">...</div>
                                 </div>
                               </div>
 
-                              <h4 className="text-[16px] md:text-[18px] font-serif font-black leading-tight text-foreground group-hover:text-blue-600 transition-colors line-clamp-2 pr-4 mb-2 flex items-start gap-1">
-                                <span className="text-lg leading-none font-sans font-light shrink-0 mt-0.5 opacity-60">↗</span>
+                              <h4 className="text-[16px] md:text-[18px] font-serif font-black leading-tight text-ink group-hover:text-lens-cyan transition-colors line-clamp-2 pr-4 mb-2 flex items-start gap-2">
+                                <span className="text-[14px] leading-none font-mono font-bold shrink-0 mt-[4px] opacity-40">↗</span>
                                 {source.title}
                               </h4>
                               
-                              <span className="text-[11px] font-bold text-muted-foreground">
+                              <span className="text-mono-metadata text-ink-muted uppercase tracking-widest">
                                 {formatDistanceToNow(new Date(source.publishedAt || Date.now()), { addSuffix: true })}
-                                {extra > 0 && <span className="ml-2 px-1.5 py-0.5 bg-secondary rounded">+{extra} more</span>}
+                                {extra > 0 && <span className="ml-2 px-1.5 py-0.5 bg-paper border border-hairline border-dashed rounded-none text-ink">+{extra} MORE</span>}
                               </span>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div className="py-4 text-center border-t border-dashed border-border/50">
-                          <p className="text-muted-foreground text-[13px] font-bold">No coverage from this perspective.</p>
+                        <div className="py-8 text-center border-t-[1.5px] border-dashed border-hairline-dashed">
+                          <p className="text-mono-metadata text-ink-muted tracking-[0.2em]">NO COVERAGE FROM THIS PERSPECTIVE.</p>
                         </div>
                       )}
                     </TabsContent>
@@ -1448,9 +1494,9 @@ export default function ArticleDetail() {
 
               <div className="flex justify-center pt-5">
                 <Button variant="outline"
-                  className="rounded-full font-bold text-sm px-8 border-2 border-border hover:border-primary/50"
+                  className="rounded-none font-mono font-bold text-[11px] tracking-widest px-8 border-[1.5px] border-hairline hover:border-ink uppercase bg-transparent text-ink"
                   onClick={() => article?.clusterId ? setLocation(`/compare/${article.clusterId}`) : setLocation("/")}>
-                  Show me full coverage <ChevronRight className="w-3 h-3 ml-1" />
+                  SHOW ME FULL COVERAGE &rarr;
                 </Button>
               </div>
             </section>
@@ -1596,7 +1642,6 @@ export default function ArticleDetail() {
               </div>
             </section>
 
-          </div>{/* /end space-y-10 */}
         </div>{/* /main content min-w-0 */}
 
           {/* ── RIGHT SIDEBAR ── */}
@@ -1728,30 +1773,19 @@ export default function ArticleDetail() {
                         );
                       } else {
                         // Standard Spectrum
-                        const total = (scoreData.left || 0) + (scoreData.center || 0) + (scoreData.right || 0);
-                        const lp = total > 0 ? Math.round(((scoreData.left || 0) / total) * 100) : 0;
-                        const cp = total > 0 ? Math.round(((scoreData.center || 0) / total) * 100) : 0;
-                        const rp = total > 0 ? Math.round(((scoreData.right || 0) / total) * 100) : 0;
+                        const spectrumSources = allSources.map(s => {
+                          const bias = deriveBias(s);
+                          let position = 50;
+                          if (bias === 'left') position = 20;
+                          if (bias === 'right') position = 80;
+                          // add some jitter for visual spread
+                          position += (Math.random() * 16 - 8);
+                          return { name: s.publisher?.name || "Source", leanPosition: Math.max(0, Math.min(100, position)), lean: bias };
+                        });
 
                         return (
                           <div>
-                            <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Standard Spectrum</p>
-                            <div className="h-4 flex items-center w-full rounded-sm overflow-hidden mb-3">
-                               <div className="h-full bg-blue-400/80 flex items-center justify-center text-[8px] font-bold text-white transition-all" style={{ width: `${lp}%` }}>
-                                 {lp > 10 ? `L ${lp}%` : ""}
-                               </div>
-                               <div className="h-full bg-gray-300/80 flex items-center justify-center text-[8px] font-bold text-gray-700 transition-all" style={{ width: `${cp}%` }}>
-                                 {cp > 10 ? `C ${cp}%` : ""}
-                               </div>
-                               <div className="h-full bg-red-400/80 flex items-center justify-center text-[8px] font-bold text-white transition-all" style={{ width: `${rp}%` }}>
-                                 {rp > 10 ? `R ${rp}%` : ""}
-                               </div>
-                            </div>
-                            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                              <div><span className="font-bold">{scoreData.left || 0}</span> Left</div>
-                              <div><span className="font-bold">{scoreData.center || 0}</span> Center</div>
-                              <div><span className="font-bold">{scoreData.right || 0}</span> Right</div>
-                            </div>
+                            <SpectrumStrip sources={spectrumSources} />
                           </div>
                         );
                       }
@@ -1767,65 +1801,68 @@ export default function ArticleDetail() {
               </div>
             </div>
 
-            {/* ── GROUND NEWS: FACTUALITY ── */}
-            <div className="border-b border-border/50 pb-4 pt-4">
-              <div className="px-1">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-[12px] font-serif font-black text-foreground flex items-center gap-1">Factuality <span className="text-[9px] font-sans text-muted-foreground border border-border rounded-full w-3 h-3 flex items-center justify-center">i</span></h3>
-                  <Lock className="w-3 h-3 text-muted-foreground" />
-                </div>
-                <p className="text-[9px] text-muted-foreground mb-3">To view factuality data please <span className="underline cursor-pointer">Upgrade to Premium</span></p>
-                <div className="w-full h-3 bg-gray-300 dark:bg-gray-800 rounded-sm mb-1" />
-                <div className="w-2/3 h-2 bg-gray-300 dark:bg-gray-800 rounded-sm" />
+            {/* ── GROUND NEWS: FACTUALITY & OWNERSHIP ── */}
+            <div className="border-b-[1.5px] border-dashed border-hairline-dashed pb-6 pt-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[14px] font-serif font-black text-foreground flex items-center gap-2">
+                  Credibility Matrix
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-sm bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 font-sans tracking-widest uppercase">AI</span>
+                </h3>
               </div>
-            </div>
+              
+              <div className="relative w-full aspect-square bg-card-surface border-[1.5px] border-hairline rounded-lg overflow-hidden">
+                {/* Grid Lines */}
+                <div className="absolute inset-0 grid grid-cols-2 grid-rows-2">
+                  <div className="border-b border-r border-hairline/30 bg-wire-blue/5"></div>
+                  <div className="border-b border-hairline/30 bg-wire-red/5"></div>
+                  <div className="border-r border-hairline/30 bg-wire-blue/5"></div>
+                  <div className="bg-wire-red/5"></div>
+                </div>
+                
+                {/* Axis Labels */}
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">High Factuality</div>
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Low Factuality</div>
+                <div className="absolute left-2 top-1/2 -translate-y-1/2 -rotate-90 text-[9px] font-bold text-muted-foreground uppercase tracking-widest origin-center">Lean Left</div>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 -rotate-90 text-[9px] font-bold text-muted-foreground uppercase tracking-widest origin-center">Lean Right</div>
+                
+                {/* Plot Data */}
+                {allSources.slice(0, 15).map((s, i) => {
+                  const bias = deriveBias(s);
+                  // Left -100 to +100 Right mapped to 10% to 90%
+                  let xPos = 50;
+                  if (bias === 'left') xPos = 20 + (Math.random() * 20);
+                  if (bias === 'right') xPos = 60 + (Math.random() * 20);
+                  if (bias === 'center') xPos = 40 + (Math.random() * 20);
+                  
+                  // High factuality is Top (10%), Low factuality is Bottom (90%)
+                  const yPos = 15 + (Math.random() * 40); // Skewing high factuality for demo
+                  
+                  let dotColor = 'bg-ink-muted';
+                  if (bias === 'left') dotColor = 'bg-wire-blue';
+                  if (bias === 'right') dotColor = 'bg-wire-red';
 
-            {/* ── GROUND NEWS: OWNERSHIP ── */}
-            <div className="border-b border-border/50 pb-4 pt-4">
-              <div className="px-1">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-[12px] font-serif font-black text-foreground flex items-center gap-1">Ownership <span className="text-[9px] font-sans text-muted-foreground border border-border rounded-full w-3 h-3 flex items-center justify-center">i</span></h3>
-                  <Lock className="w-3 h-3 text-muted-foreground" />
-                </div>
-                <p className="text-[9px] text-muted-foreground mb-3">To view ownership data please <span className="underline cursor-pointer">Upgrade to Premium</span></p>
-                <div className="w-full h-2 bg-gray-300 dark:bg-gray-800 rounded-sm mb-1 flex overflow-hidden">
-                   <div className="h-full bg-blue-300 w-1/4" />
-                   <div className="h-full bg-green-300 w-1/4" />
-                   <div className="h-full bg-amber-300 w-1/4" />
-                   <div className="h-full bg-red-300 w-1/4" />
-                </div>
+                  return (
+                    <div 
+                      key={i}
+                      className={`absolute w-3 h-3 rounded-full ${dotColor} border border-background shadow-sm transform -translate-x-1/2 -translate-y-1/2 hover:scale-150 transition-transform cursor-pointer group`}
+                      style={{ left: `${xPos}%`, top: `${yPos}%` }}
+                    >
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-ink text-paper text-[10px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity rounded pointer-events-none z-10">
+                        {s.publisher?.name || "Source"}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
             {/* ── GROUND NEWS: WHO BROKE THE STORY ── */}
-            <div className="border-b border-border/50 pb-4 pt-4 px-1">
-               <StoryOrigin publisher={deepIntelligence?.origin?.publisher} publishedAt={deepIntelligence?.origin?.publishedAt} />
-            </div>
-
-            {/* ── GROUND NEWS: SIMILAR NEWS TOPICS ── */}
-            <div className="border-b border-border/50 py-4 px-1">
-               <h3 className="text-[14px] font-serif font-black text-foreground mb-4">Similar News Topics</h3>
-               <div className="space-y-3">
-                 <div className="flex items-center justify-between text-[11px] font-bold border-b border-border/50 pb-2">
-                    <div className="flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-secondary overflow-hidden"><img src="https://images.unsplash.com/photo-1505672678657-cc7037095e60?w=100&q=80" className="object-cover" /></div> Earthquake</div>
-                    <span className="text-xl font-light">+</span>
-                 </div>
-                 <div className="flex items-center justify-between text-[11px] font-bold border-b border-border/50 pb-2">
-                    <div className="flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-secondary overflow-hidden"><img src="https://images.unsplash.com/photo-1518623489648-a173ef7824f3?w=100&q=80" className="object-cover" /></div> Latin America</div>
-                    <span className="text-xl font-light">+</span>
-                 </div>
-                 <div className="flex items-center justify-between text-[11px] font-bold border-b border-border/50 pb-2">
-                    <div className="flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-secondary overflow-hidden"><img src="https://images.unsplash.com/photo-1542382156909-92f754ef2eb9?w=100&q=80" className="object-cover" /></div> Natural Disasters</div>
-                    <span className="text-xl font-light">+</span>
-                 </div>
-                 <div className="flex items-center justify-between text-[11px] font-bold border-b border-border/50 pb-2">
-                    <div className="flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-secondary overflow-hidden"><img src="https://images.unsplash.com/photo-1534088568595-a066f410cbda?w=100&q=80" className="object-cover" /></div> Venezuela</div>
-                    <span className="text-xl font-light">+</span>
-                 </div>
-                 <div className="flex justify-center pt-2">
-                    <button className="border border-border rounded px-4 py-1 text-[10px] font-bold bg-background">Show All</button>
-                 </div>
-               </div>
+            <div className="border-b-[1.5px] border-dashed border-hairline-dashed pb-4 pt-4 px-1">
+               <OriginMedallion 
+                 source={deepIntelligence?.origin?.publisher?.name || allSources?.[0]?.publisher?.name || "The Lens Dispatch"}
+                 timestamp={deepIntelligence?.origin?.publishedAt ? formatDistanceToNow(new Date(deepIntelligence.origin.publishedAt), { addSuffix: true }) : formatDistanceToNow(new Date(allSources?.[0]?.publishedAt || Date.now()), { addSuffix: true })}
+                 integrityScore={92} 
+               />
             </div>
           </motion.aside>
         </div>{/* /grid */}

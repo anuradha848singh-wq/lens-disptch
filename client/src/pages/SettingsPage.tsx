@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { MainNav } from "@/components/MainNav";
 import { NewsFooter } from "@/components/NewsFooter";
-import { MapPin, Search, Globe, Filter, Save, CheckCircle2, Navigation } from "lucide-react";
+import { MapPin, Search, Globe, Filter, Save, CheckCircle2, Navigation, ShieldCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 
@@ -203,11 +203,107 @@ export default function SettingsPage() {
                     <Switch 
                       name="useBrowserLocation" 
                       defaultChecked={settings?.useBrowserLocation}
-                    />
+                     />
                   </div>
                 </CardContent>
               </Card>
             </div>
+
+            {/* Membership & Billing */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <ShieldCheck className="w-5 h-5 text-indigo-500" />
+                  Membership & Billing
+                </CardTitle>
+                <CardDescription>
+                  Manage your subscription plans and unlock advanced AI features.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between p-4 rounded-lg bg-indigo-50/50 border border-indigo-100 dark:bg-indigo-950/20 dark:border-indigo-500/20">
+                  <div className="pr-4">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-sm text-foreground">
+                        {user.isPremium ? "Premium Pro Subscription" : "Free Plan Reader"}
+                      </span>
+                      {user.isPremium ? (
+                        <span className="bg-indigo-500/10 text-indigo-600 border border-indigo-500/20 text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-sm">ACTIVE</span>
+                      ) : (
+                        <span className="bg-muted text-muted-foreground border border-border text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-sm">INACTIVE</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {user.isPremium 
+                        ? "You have full access to xAI Grok briefings, Sarvam AI, market intelligence, and bias trackers."
+                        : "Upgrade to unlock advanced AI narrative insights, entity quote comparisons, and corporate ownership stats."}
+                    </p>
+                  </div>
+
+                  <div>
+                    {user.isPremium ? (
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        onClick={async () => {
+                          try {
+                            const res = await fetch("/api/stripe/portal", { method: "POST" });
+                            const data = await res.json();
+                            if (data.url) window.location.href = data.url;
+                          } catch (err: any) {
+                            toast({ title: "Portal error", description: err.message, variant: "destructive" });
+                          }
+                        }}
+                      >
+                        Manage Billing
+                      </Button>
+                    ) : (
+                      <Button 
+                        type="button" 
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                        onClick={() => setLocation("/pricing")}
+                      >
+                        Upgrade Account
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {!user.isPremium ? (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await fetch("/api/stripe/mock-upgrade", { method: "POST" });
+                        if (res.ok) {
+                          toast({ title: "Sandbox Upgrade Success", description: "Account marked as PRO" });
+                          window.location.reload();
+                        }
+                      }}
+                      className="text-[10px] uppercase font-bold text-indigo-500 hover:underline"
+                    >
+                      [Developer] Force Sandbox PRO Unlock
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await fetch("/api/stripe/mock-downgrade", { method: "POST" });
+                        if (res.ok) {
+                          toast({ title: "Sandbox Downgrade Success", description: "Account marked as FREE" });
+                          window.location.reload();
+                        }
+                      }}
+                      className="text-[10px] uppercase font-bold text-red-500 hover:underline"
+                    >
+                      [Developer] Reset to FREE
+                    </button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             {/* Advanced Preferences */}
             <Card>

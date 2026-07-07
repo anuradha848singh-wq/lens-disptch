@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useLocation, Link } from "wouter";
-import { motion } from "framer-motion";
-import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
+import { motion, AnimatePresence } from "framer-motion";
+import { useQuery, useInfiniteQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { PremiumLoader } from "@/components/ui/PremiumLoader";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { MainNav } from "@/components/MainNav";
@@ -23,12 +25,17 @@ import { StoryCardErrorBoundary } from "@/components/StoryCardErrorBoundary";
 import { AuthModal } from "@/components/AuthModal";
 import { useCountryProfile } from "@/hooks/useCountryProfile";
 import { useUrlState } from "@/hooks/useUrlState";
+import { Aperture, DispatchCard, OffTheWire, WireTicker } from "@/components/DispatchPrimitives";
+import { proxyImage } from "@/lib/image-utils";
 
 type ArticleWithMetadata = ArticleWithDetails & {
   category?: string;
   proEstablishmentCount?: number;
   neutralCount?: number;
   proOppositionCount?: number;
+  totalSources?: number;
+  shannonDiversity?: number;
+  heroImageUrl?: string;
 };
 
 
@@ -65,7 +72,6 @@ export default function HomePage() {
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [lastFirstArticleId, setLastFirstArticleId] = useState<string | null>(null);
 
   const [location] = useLocation();
   const isForYou = location === "/for-you";
@@ -82,7 +88,7 @@ export default function HomePage() {
     return cat ? cat.slug : "";
   }, [selectedCategoryId, categories]);
 
-  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+  const { data, isLoading, isFetching, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: [isForYou ? "/api/articles/for-you" : "/api/homepage", searchQuery, selectedCategorySlug, countryCode],
     queryFn: ({ pageParam = 0 }) => 
       isForYou 
@@ -91,33 +97,43 @@ export default function HomePage() {
     getNextPageParam: (lastPage, allPages) => lastPage.length === 40 ? allPages.length * 40 : undefined,
     initialPageParam: 0,
     staleTime: 30000, // 30s cache to prevent huge re-fetches
-    refetchInterval: 90000, // 90s visible-tab polling
-    refetchIntervalInBackground: false, // pauses when tab hidden
+    placeholderData: keepPreviousData,
   });
 
   const allArticles = useMemo(() => {
-    return data?.pages.flat() || [];
-  }, [data]) as ArticleWithMetadata[];
+    const fetched = data?.pages.flat() || [];
+    return fetched as ArticleWithMetadata[];
+  }, [data]);
+
+  // Lightweight polling to detect new stories without triggering a layout shift
+  const { data: latestData } = useQuery({
+    queryKey: ["/api/homepage-latest", searchQuery, selectedCategorySlug, countryCode],
+    queryFn: () => 
+      isForYou 
+        ? api.articles.forYou(1, 0) 
+        : api.articles.homepage(1, 0, searchQuery, selectedCategorySlug, countryCode),
+    refetchInterval: 60000, // Check every 60s
+    refetchIntervalInBackground: false,
+  });
 
   // Trigger non-disruptive breaking news toast when tab is active and new articles arrive
   const currentFirstArticleId = allArticles[0]?.id;
+  const latestFirstArticleId = latestData?.[0]?.id;
   useEffect(() => {
-    if (currentFirstArticleId && !lastFirstArticleId) {
-      setLastFirstArticleId(currentFirstArticleId);
-    } else if (currentFirstArticleId && lastFirstArticleId && currentFirstArticleId !== lastFirstArticleId) {
+    // If the polling query detects a newer article than what's currently rendered
+    if (latestFirstArticleId && currentFirstArticleId && latestFirstArticleId !== currentFirstArticleId) {
       toast({
         title: "⚡ Breaking News Updates",
         description: "New stories have just been aggregated. Click to refresh the feed.",
         duration: 8000,
         onClick: () => {
           queryClient.invalidateQueries({ queryKey: ["/api/homepage"] });
-          setLastFirstArticleId(currentFirstArticleId);
+          queryClient.invalidateQueries({ queryKey: ["/api/articles/for-you"] });
           window.scrollTo({ top: 0, behavior: "smooth" });
         }
       });
-      setLastFirstArticleId(currentFirstArticleId);
     }
-  }, [currentFirstArticleId, lastFirstArticleId, queryClient, toast]);
+  }, [latestFirstArticleId, currentFirstArticleId, queryClient, toast]);
 
 
   const heroArticles = useMemo(() => allArticles.slice(0, 8), [allArticles]);
@@ -207,10 +223,9 @@ export default function HomePage() {
       <div className="min-h-screen bg-background">
         <BreakingTicker />
         <MainNav onSearch={urlState.setSearch} />
-        <CategoryStrip selectedCategoryId={null} onSelect={() => {}} onSearch={urlState.setSearch} />
-        <div className="max-w-[1400px] mx-auto px-4 py-8">
-          <div className="flex flex-col xl:grid xl:grid-cols-[240px_minmax(0,1fr)_300px] gap-6 xl:gap-8">
-            <div className="hidden xl:block space-y-4">
+        <div className="max-w-[1800px] mx-auto px-4 py-8">
+          <div className="flex flex-col lg:grid lg:grid-cols-[180px_minmax(0,1fr)_260px] gap-4 lg:gap-6">
+            <div className="hidden lg:block space-y-4">
               {[1,2,3,4,5].map(i => <div key={i} className="h-12 bg-muted animate-shimmer rounded" />)}
             </div>
             <div className="space-y-6">
@@ -231,12 +246,43 @@ export default function HomePage() {
   }
 
 
+  const hasActiveFilters = searchQuery || selectedCategoryId || selectedTopic || (countryCode && countryCode !== "GLOBAL");
+
   if (!isLoading && allArticles.length === 0) {
+    if (hasActiveFilters) {
+      return (
+        <div className="min-h-screen bg-background">
+          <BreakingTicker />
+          <MainNav onSearch={urlState.setSearch} />
+          <div className="max-w-[1400px] mx-auto px-4 py-24 text-center">
+            <div className="max-w-lg mx-auto animate-fade-in-up">
+              <div className="text-6xl mb-6">🌍</div>
+              <h2 className="text-2xl font-display font-black mb-3">No articles found</h2>
+              <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                We couldn't find any articles for this specific edition or topic. The newsroom is constantly gathering updates.
+              </p>
+              <button
+                onClick={() => {
+                  urlState.setSearch("");
+                  urlState.setCategoryId(null, null);
+                  setSelectedTopic(null);
+                  setCountryCode("GLOBAL");
+                }}
+                className="inline-block px-6 py-2.5 bg-foreground text-background text-xs font-black uppercase tracking-widest hover:bg-accent-editorial transition-colors"
+              >
+                Return to Global Feed
+              </button>
+            </div>
+          </div>
+          <NewsFooter />
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-background">
         <BreakingTicker />
         <MainNav onSearch={urlState.setSearch} />
-        <CategoryStrip selectedCategoryId={null} onSelect={() => {}} onSearch={urlState.setSearch} />
         <div className="max-w-[1400px] mx-auto px-4 py-24 text-center">
           <div className="max-w-lg mx-auto animate-fade-in-up">
             <div className="text-6xl mb-6">📰</div>
@@ -258,219 +304,199 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground selection:bg-accent-editorial/20">
+    <div className="min-h-screen bg-paper text-ink font-sans">
       <BreakingTicker />
       <MainNav onSearch={urlState.setSearch} searchQuery={searchQuery} />
-      <CategoryStrip
-        selectedCategoryId={selectedCategoryId}
-        onSelect={(id, topic) => {
-          urlState.setCategoryId(id, null);
-          setSelectedTopic(topic || null);
-        }}
-        onSearch={(q) => {
-          urlState.setSearch(q);
-          setSelectedTopic(null);
-        }}
-      />
 
-
-      <div className="w-full max-w-[1800px] mx-auto px-2 md:px-4 py-4">
-        <div className="flex flex-col xl:grid xl:grid-cols-[200px_minmax(0,1fr)_280px] gap-4 xl:gap-6 items-start">
-
-          {/* LEFT SIDEBAR (Daily Briefing) */}
-          <aside className="hidden xl:block w-full sticky top-20">
-            <SectionErrorBoundary fallbackMessage="Could not load Daily Briefing">
-              <DailyBriefingSidebar articles={briefingSidebarArticles} />
-            </SectionErrorBoundary>
-          </aside>
-
-
-          {/* MAIN COLUMN */}
-          <main className="min-w-0 w-full overflow-hidden flex flex-col gap-4">
-
-            {isForYou && (
-              <div className="self-start px-3 py-1 bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400 rounded-full text-xs font-black uppercase tracking-wider mb-2 animate-fade-in shadow-sm border border-red-200/50">
-                ✨ Personalised for you
-              </div>
-            )}
-
-            {/* Edition Banner — only show when a region is active */}
-            {countryCode && countryCode !== "GLOBAL" && countryCode !== "US" && (
-              <div className="flex items-center gap-3 px-4 py-2 bg-gradient-to-r from-accent-editorial/10 to-transparent border border-accent-editorial/20 rounded-lg mb-1 animate-fade-in">
-                <span className="text-lg leading-none">
-                  {countryCode === "UK" ? "🇬🇧" : countryCode === "IN" ? "🇮🇳" : countryCode === "AU" ? "🇦🇺" : countryCode === "CA" ? "🇨🇦" : countryCode === "DE" ? "🇩🇪" : countryCode === "FR" ? "🇫🇷" : countryCode === "JP" ? "🇯🇵" : "🌍"}
-                </span>
-                <div>
-                  <span className="text-[11px] font-black uppercase tracking-widest text-accent-editorial">
-                    {countryCode === "UK" ? "United Kingdom" : countryCode === "IN" ? "India" : countryCode === "AU" ? "Australia" : countryCode === "CA" ? "Canada" : countryCode === "DE" ? "Germany" : countryCode === "FR" ? "France" : countryCode === "JP" ? "Japan" : countryCode} Edition
-                  </span>
-                  <p className="text-[10px] text-muted-foreground">Showing news prioritised for this region</p>
-                </div>
-                <button
-                  onClick={() => setCountryCode("GLOBAL")}
-                  className="ml-auto text-[10px] font-bold text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  World →
-                </button>
-              </div>
-            )}
-
-            {/* Hero Zone */}
-            <EditorialHero articles={heroArticles} />
-
-
-
-            {/* MAIN FEED SECTION */}
-            <section className="mt-2">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-3 mb-4 pb-2 border-b border-border/40">
-                <div className="flex items-center gap-4 w-full">
-                  <h2 className="text-[18px] font-sans font-bold tracking-tight shrink-0 uppercase">MAIN FEED</h2>
-                  <div className="flex items-center gap-1 cursor-pointer mr-2">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">LATEST</span>
-                    <ChevronRight className="w-3 h-3 text-muted-foreground rotate-90" />
+      <div className="max-w-[1400px] mx-auto px-4 py-6">
+        <div className="flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_300px] gap-8 items-start">
+          
+          <main className="min-w-0 w-full flex flex-col gap-8">
+            {/* Hero + Wire Rail */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 border border-border">
+              {/* Left Column: Top 2 Featured Dispatches Side-by-Side */}
+              <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-dashed divide-hairline-dashed bg-card">
+                
+                {/* Featured Dispatch 1 */}
+                {heroArticles[0] && (
+                  <div className="p-6 flex flex-col justify-between min-h-[420px] group">
+                    <div>
+                      <div className="mb-4">
+                        <Aperture sources={Array(heroArticles[0]?.totalSources || 5).fill({lean: 'unrated'})} diversityScore={heroArticles[0]?.shannonDiversity || 60} size="feature" />
+                      </div>
+                      <div className="text-eyebrow text-muted-foreground mb-2 tracking-widest uppercase">FEATURED DISPATCH &middot; {Math.round(heroArticles[0]?.shannonDiversity || 60)}% DIVERSE</div>
+                      <Link href={`/article/${heroArticles[0]?.id || ''}`}>
+                        <h2 className="font-serif text-[22px] font-black text-ink leading-tight mb-4 cursor-pointer hover:text-signal-yellow transition-colors line-clamp-3">{heroArticles[0]?.title}</h2>
+                      </Link>
+                    </div>
+                    
+                    <div className="mt-6">
+                      {heroArticles[0]?.heroImageUrl ? (
+                        <img src={proxyImage(heroArticles[0].heroImageUrl, 400) || undefined} className="w-full h-44 object-cover border-[1.5px] border-dashed border-hairline-dashed" />
+                      ) : (
+                        <div className="w-full h-44 border-[1.5px] border-dashed border-hairline-dashed relative bg-card-surface select-none font-mono flex flex-col items-center justify-center p-4">
+                          <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808008_1px,transparent_1px),linear-gradient(to_bottom,#80808008_1px,transparent_1px)] bg-[size:16px_16px]" />
+                          <div className="absolute top-2 left-2 text-[9px] text-ink-muted/50 tracking-widest uppercase">DISPATCH TELEMETRY</div>
+                          <div className="absolute bottom-2 right-2 text-[9px] text-ink-muted/50 tracking-widest">LENS-TRUTH.01</div>
+                          <div className="w-8 h-8 border border-dashed border-ink-muted/40 flex items-center justify-center text-ink-muted/60 text-sm">
+                            +
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  
-                  {/* Dynamic perspectives counter banner */}
-                  <div className="flex items-center gap-1.5 px-3 py-1 bg-secondary/80 rounded-full border border-border/40 hover:bg-secondary transition-all">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-600">
-                      <line x1="18" y1="20" x2="18" y2="10"></line>
-                      <line x1="12" y1="20" x2="12" y2="4"></line>
-                      <line x1="6" y1="20" x2="6" y2="14"></line>
-                    </svg>
-                    <span className="text-[10px] font-black uppercase tracking-[0.08em] text-foreground">
-                      {uniquePerspectivesCount} Perspectives
-                    </span>
+                )}
+
+                {/* Featured Dispatch 2 */}
+                {heroArticles[1] && (
+                  <div className="p-6 flex flex-col justify-between min-h-[420px] group">
+                    <div>
+                      <div className="mb-4">
+                        <Aperture sources={Array(heroArticles[1]?.totalSources || 5).fill({lean: 'unrated'})} diversityScore={heroArticles[1]?.shannonDiversity || 60} size="feature" />
+                      </div>
+                      <div className="text-eyebrow text-muted-foreground mb-2 tracking-widest uppercase">SECONDARY DISPATCH &middot; {Math.round(heroArticles[1]?.shannonDiversity || 60)}% DIVERSE</div>
+                      <Link href={`/article/${heroArticles[1]?.id || ''}`}>
+                        <h2 className="font-serif text-[22px] font-black text-ink leading-tight mb-4 cursor-pointer hover:text-signal-yellow transition-colors line-clamp-3">{heroArticles[1]?.title}</h2>
+                      </Link>
+                    </div>
+                    
+                    <div className="mt-6">
+                      {heroArticles[1]?.heroImageUrl ? (
+                        <img src={proxyImage(heroArticles[1].heroImageUrl, 400) || undefined} className="w-full h-44 object-cover border-[1.5px] border-dashed border-hairline-dashed" />
+                      ) : (
+                        <div className="w-full h-44 border-[1.5px] border-dashed border-hairline-dashed relative bg-card-surface select-none font-mono flex flex-col items-center justify-center p-4">
+                          <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808008_1px,transparent_1px),linear-gradient(to_bottom,#80808008_1px,transparent_1px)] bg-[size:16px_16px]" />
+                          <div className="absolute top-2 left-2 text-[9px] text-ink-muted/50 tracking-widest uppercase">DISPATCH TELEMETRY</div>
+                          <div className="absolute bottom-2 right-2 text-[9px] text-ink-muted/50 tracking-widest">LENS-TRUTH.02</div>
+                          <div className="w-8 h-8 border border-dashed border-ink-muted/40 flex items-center justify-center text-ink-muted/60 text-sm">
+                            +
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <button className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground hover:text-foreground shrink-0 border border-border/50 px-3 py-1.5 rounded-sm">
-                  <Filter className="w-3 h-3" /> FILTERS
-                </button>
+                )}
               </div>
 
-              {/* Feed Grid:
-                  - key changes on filter switch → re-runs stagger animation
-                  - initial/animate only fire on mount+key-change
-                  - Individual cards use viewport once=true so they don't re-animate on refetch
-              */}
-              <div
-                key={selectedCategoryId || selectedTopic || "all"}
-                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4"
-              >
-                {categoryArticles.slice(0, 36).map((a, index) => (
-                  <StoryCardErrorBoundary key={a.id}>
-                    <motion.div
-                      initial={{ opacity: 0, y: 12 }}
-                      whileInView={{ opacity: 1, y: 0 }}
-                      viewport={{ once: true, margin: "-40px" }}
-                      transition={{ duration: 0.25, delay: Math.min(index, 8) * 0.035, ease: "easeOut" }}
-                      style={{ willChange: "opacity, transform" }}
-                    >
-                      <StoryCard article={a} variant="standard" priority={index === 0} />
-                    </motion.div>
-                  </StoryCardErrorBoundary>
-                ))}
-              </div>
-
-              {hasNextPage && (
-                <div className="mt-12 flex justify-center border-t border-border/40 pt-8">
-                  <button 
-                    onClick={() => fetchNextPage()} 
-                    disabled={isFetchingNextPage}
-                    className="text-[11px] font-black uppercase tracking-widest text-foreground hover:text-primary transition-colors disabled:opacity-50"
-                  >
-                    {isFetchingNextPage ? "LOADING..." : "LOAD MORE STORIES"} <ChevronRight className="w-3 h-3 rotate-90 inline-block ml-1" />
-                  </button>
-                </div>
-              )}
-            </section>
-
-            {/* News Index Section */}
-            <section className="mt-8 border-t-4 border-foreground pt-8">
-              <div className="flex items-center justify-between gap-4 mb-6">
-                <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide pb-2">
-                  <h2 className="text-2xl font-serif font-black tracking-tight shrink-0 uppercase mr-4">THE NEWS INDEX</h2>
-                  <button onClick={() => setIndexTab('all')} className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === 'all' ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}>ALL</button>
-                  {(categories as Category[]).map(cat => (
-                    <button 
-                      key={cat.id} 
-                      onClick={() => setIndexTab(cat.slug || cat.name.toLowerCase())} 
-                      className={`pb-2 text-[13px] font-bold uppercase whitespace-nowrap ${indexTab === (cat.slug || cat.name.toLowerCase()) ? 'text-foreground border-b-2 border-red-600' : 'text-muted-foreground hover:text-foreground'}`}
-                    >
-                      {cat.name}
-                    </button>
+              {/* Right Column: Wire Feed */}
+              <div className="lg:col-span-1 flex flex-col border-t lg:border-t-0 lg:border-l border-dashed border-hairline-dashed bg-card-surface">
+                <div className="p-4 border-b border-border text-eyebrow tracking-widest text-ink">WIRE FEED</div>
+                <div className="flex flex-col flex-1 overflow-y-auto max-h-[420px]">
+                  {heroArticles.slice(2, 8).map((a, i) => (
+                    <Link key={a.id} href={`/article/${a.id}`}>
+                      <div className="p-4 border-b-[1.5px] border-dashed border-hairline-dashed last:border-b-0 hover:bg-muted cursor-pointer">
+                        <div className="text-mono-metadata text-muted-foreground mb-2 uppercase">{new Date(a.publishedAt || '').toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} IST</div>
+                        <div className="text-dek text-ink line-clamp-2">{a.title}</div>
+                      </div>
+                    </Link>
                   ))}
                 </div>
-                <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 border border-border rounded shadow-sm bg-white cursor-pointer hover:bg-secondary transition-colors">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-600"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-foreground">{uniquePerspectivesCount} Perspectives</span>
-                </div>
               </div>
+            </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                 {indexArticles.map(a => (
-                  <StoryCardErrorBoundary key={a.id}>
-                    <StoryCard article={a} variant="news-index" />
-                  </StoryCardErrorBoundary>
-                ))}
+            {/* Bento Grid */}
+            <div className="flex items-center justify-between border-b-[1.5px] border-dashed border-hairline-dashed pb-2">
+              <h2 className="text-eyebrow text-ink tracking-widest">LATEST DISPATCHES</h2>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-px bg-border border border-border">
+              {categoryArticles.slice(8, 38).map((a, i) => {
+                const isWide = (a.totalSources || 0) >= 5;
+                return (
+                  <Link key={a.id} href={`/article/${a.id}`}>
+                    <div className={cn("h-full bg-card", isWide ? 'md:col-span-2' : '')}>
+                      <DispatchCard 
+                        variant={isWide ? 'wide' : 'standard'}
+                        image={proxyImage(a.heroImageUrl, 400) || undefined}
+                        sourceCount={a.totalSources || 1}
+                        eyebrow={`${a.categories?.[0]?.name || 'GENERAL'} · ${a.publisher?.name || 'SOURCE'} · ${new Date(a.publishedAt || '').toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`}
+                        headline={a.title}
+                        dek={a.excerpt || undefined}
+                        diversityPct={a.shannonDiversity || 0}
+                        className="h-full border-none"
+                      />
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+            
+            {/* Category Showcases (Different Parts & Shapes) */}
+            {(categories as Category[]).slice(0, 4).map((cat) => {
+              const catArticles = groupedArticlesByCategory.get(cat.id) || [];
+              const uniqueArticles = catArticles.filter(a => !heroArticles.slice(0, 8).some(h => h.id === a.id));
+              if (uniqueArticles.length === 0) return null;
 
-                {/* News. Balanced. Always. Promo Box */}
-                <div className="bg-[#F6F1EA] rounded-sm border border-border/40 p-8 flex flex-col justify-between relative overflow-hidden">
-                  <div className="relative z-10">
-                    <h3 className="text-2xl font-serif font-black leading-tight mb-2">
-                      News. Balanced.<br />
-                      <span className="text-red-600">Always.</span>
-                    </h3>
-                    <p className="text-[13px] text-muted-foreground font-medium leading-relaxed max-w-[240px] mb-6">
-                      We analyze multiple sources to bring you balanced perspectives on the stories that matter.
-                    </p>
-                    <button className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-[0.2em] px-8 py-3 rounded-sm transition-all shadow-md active:scale-95">
-                      SUBSCRIBE NOW
+              return (
+                <div key={cat.id} className="mt-8 border border-border bg-card">
+                  <div className="p-4 border-b border-border bg-secondary/30 flex items-center justify-between">
+                    <h3 className="text-eyebrow text-ink tracking-widest font-black uppercase">{cat.name} COVERAGE</h3>
+                    <button 
+                      onClick={() => urlState.setCategoryId(cat.id, cat.slug)}
+                      className="text-[10px] uppercase font-bold tracking-widest cursor-pointer hover:underline bg-transparent border-none p-0"
+                    >
+                      View All &rarr;
                     </button>
                   </div>
-                  
-                  {/* Decorative background newspaper icon */}
-                  <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none translate-x-4 translate-y-4 rotate-12">
-                     <svg width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><path d="M18 14h-8"></path><path d="M15 18h-5"></path><path d="M10 6h8v4h-8V6Z"></path></svg>
+                  <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-border">
+                    {uniqueArticles.slice(0, 3).map((a) => (
+                      <Link key={a.id} href={`/article/${a.id}`}>
+                        <div className="p-4 hover:bg-muted/50 cursor-pointer flex flex-col justify-between h-[280px]">
+                          <div>
+                            <div className="text-[9px] font-bold text-muted-foreground mb-1 uppercase">
+                              {a.publisher?.name || 'SOURCE'} &middot; {new Date(a.publishedAt || '').toLocaleDateString()}
+                            </div>
+                            <h4 className="font-serif text-[15px] font-black text-ink leading-snug line-clamp-3 mb-2">
+                              {a.title}
+                            </h4>
+                            <p className="text-xs text-muted-foreground line-clamp-3">{a.excerpt || (a as any).description}</p>
+                          </div>
+                          {a.heroImageUrl && (
+                            <img src={proxyImage(a.heroImageUrl, 200) || undefined} className="w-full h-24 object-cover mt-3 border border-border" />
+                          )}
+                        </div>
+                      </Link>
+                    ))}
                   </div>
                 </div>
+              );
+            })}
+
+            {hasNextPage && (
+              <div className="flex justify-center pt-4">
+                <button 
+                  onClick={() => fetchNextPage()} 
+                  disabled={isFetchingNextPage}
+                  className="px-6 py-3 border border-border bg-card hover:bg-muted text-eyebrow tracking-widest transition-colors"
+                >
+                  {isFetchingNextPage ? <PremiumLoader size="sm" /> : "LOAD MORE DISPATCHES"}
+                </button>
               </div>
-            </section>
+            )}
           </main>
-
-          {/* RIGHT SIDEBAR */}
-          <aside className="w-full xl:w-[280px] xl:min-w-[280px] space-y-4 flex flex-col shrink-0 sticky top-20">
-            <SectionErrorBoundary fallbackMessage="Could not load Trending">
-              <TrendingTopicsWidget articles={allArticles} />
-            </SectionErrorBoundary>
-            <SectionErrorBoundary fallbackMessage="Could not load Latest Updates">
-              <LatestUpdatesWidget articles={allArticles} />
-            </SectionErrorBoundary>
-
-            {/* Factuality CTA Card */}
-            <Link href="/factuality">
-              <div className="border border-border/60 rounded-xl p-4 hover:border-accent-editorial/40 hover:shadow-sm transition-all cursor-pointer bg-gradient-to-br from-secondary/20 to-transparent group">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-7 h-7 rounded-lg bg-accent-editorial/10 flex items-center justify-center">
-                    <span className="text-sm">⚖️</span>
-                  </div>
-                  <span className="text-[11px] font-black uppercase tracking-widest text-accent-editorial">Factuality Index</span>
+          
+          <aside className="w-full lg:w-[300px] flex flex-col gap-8">
+            <WireTicker 
+              title="WIRE / TRENDING TODAY" 
+              items={allArticles.slice(0, 10).map((a, i) => ({ rank: i + 1, headline: a.title }))} 
+            />
+            {/* Most polarizing highlight */}
+            <div className="border border-wire-red bg-card-surface p-4 relative">
+              <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-wire-red" />
+              <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-wire-red" />
+              <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-wire-red" />
+              <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-wire-red" />
+              <div className="text-eyebrow text-ink mb-4 tracking-widest">MOST POLARIZING TODAY</div>
+              <Link href={`/article/${allArticles.find(a => a.bias === 'pro_opposition' || a.bias === 'pro_establishment')?.id || allArticles[0]?.id}`}>
+                <div className="cursor-pointer">
+                  <div className="text-card-headline text-wire-red mb-2">{allArticles.find(a => a.bias === 'pro_opposition' || a.bias === 'pro_establishment')?.title || allArticles[0]?.title}</div>
+                  <div className="text-mono-metadata text-muted-foreground uppercase">HIGHLY CONTESTED</div>
                 </div>
-                <p className="text-[12px] text-muted-foreground leading-snug mb-3">
-                  See which publishers score highest for accuracy, corrections, and transparency.
-                </p>
-                <span className="text-[10px] font-black uppercase tracking-widest text-foreground group-hover:text-accent-editorial transition-colors">
-                  View Ratings →
-                </span>
-              </div>
-            </Link>
-
-            <SectionErrorBoundary fallbackMessage="Could not load Polarizing Feed">
-              <PolarizingWidget articles={allArticles} />
-            </SectionErrorBoundary>
+              </Link>
+            </div>
+            <BlindspotFeed articles={allArticles} />
           </aside>
         </div>
       </div>
-
       <NewsFooter />
     </div>
   );

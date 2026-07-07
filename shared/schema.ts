@@ -7,6 +7,9 @@ export const userRoleEnum = pgEnum("user_role", ["admin", "editor"]);
 export const userStatusEnum = pgEnum("user_status", ["active", "inactive", "suspended"]);
 export const articleStatusEnum = pgEnum("article_status", ["draft", "review", "published", "archived"]);
 export const biasEnum = pgEnum("bias", ["pro_establishment", "pro_opposition", "regional_aligned", "neutral"]);
+export const politicalAlignmentEnum = pgEnum("political_alignment", ["far_left", "left", "center_left", "center", "center_right", "right", "far_right"]);
+export const narrativeStanceEnum = pgEnum("narrative_stance", ["pro_establishment", "pro_opposition", "neutral", "state_affiliated"]);
+export const regionEnum = pgEnum("region", ["north_america", "europe", "asia", "middle_east", "africa", "latam", "oceania", "global"]);
 export const mediaTypeEnum = pgEnum("media_type", ["image", "video", "embed"]);
 export const factualityEnum = pgEnum("factuality", ["very_high", "high", "mixed", "low", "very_low"]);
 export const ownerTypeEnum = pgEnum("owner_type", ["corporation", "individual", "nonprofit", "government", "unknown"]);
@@ -35,6 +38,10 @@ export const users = pgTable("users", {
   preferences: jsonb("preferences").$type<Record<string, any>>().default({}),
   interestVector: vector("interest_vector"),
   biasProfile: jsonb("bias_profile").$type<Record<string, number>>().default({}),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  subscriptionStatus: text("subscription_status"),
+  isPremium: boolean("is_premium").default(false).notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -59,6 +66,9 @@ export const publishers = pgTable("publishers", {
   website: text("website"),
   rssUrl: text("rss_url"), 
   biasRating: biasEnum("bias_rating"),
+  politicalAlignment: politicalAlignmentEnum("political_alignment"),
+  narrativeStance: narrativeStanceEnum("narrative_stance"),
+  region: regionEnum("region"),
   factualityRating: factualityEnum("factuality_rating"),
   ownerName: text("owner_name"),
   promoterGroup: text("promoter_group"),

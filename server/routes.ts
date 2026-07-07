@@ -32,6 +32,7 @@ import { clusterRouter } from "./routes/cluster.routes";
 import { analyticsRouter } from "./routes/analytics.routes";
 import { socialRouter } from "./routes/social.routes";
 import { ogRouter } from "./routes/og.routes";
+import stripeRouter from "./routes/stripe";
 import { queryLogs, generateDiagnosis, exportCurrentSession, getLogFilesSummary, logClientError } from "./logger";
 import type { LogLevel, LogSource } from "./logger";
 
@@ -201,6 +202,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== AUTH ====================
   app.use("/api/auth", authRouter);
 
+  // ==================== STRIPE / PAYMENTS ====================
+  app.use("/api/stripe", stripeRouter);
+
   app.get("/api/auth/me", authenticateUser, async (req, res) => {
     try {
       const user = (req as any).user;
@@ -261,6 +265,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/markets", async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT DISTINCT primary_market FROM clusters WHERE primary_market IS NOT NULL`);
+      const markets = result.rows.map((r: any) => r.primary_market);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.json(markets);
+    } catch (error) {
+      console.error("Get markets error:", error);
+      res.status(500).json({ error: "Failed to get markets" });
+    }
+  });
+
   // ── High-Fidelity Engagement Signals ───────────────────────────────────────
 
   /**
@@ -294,16 +310,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const blindspots = data.filter((c: any) => {
         if (new Date(c.lastUpdatedAt) < window) return false;
-        if (c.sourceCount < 4) return false;
+        if (c.sourceCount < 2) return false;
 
         const left = c.proEstablishmentCount || 0;
         const right = c.proOppositionCount || 0;
         
-        if (left === 0 && right >= 4) return true;
-        if (right === 0 && left >= 4) return true;
-        if (left > 0 && right > 0) {
-          return (left / right >= 5) || (right / left >= 5);
-        }
+        // Blindspot if one side covers heavily (>= 2) and the other ignores or covers lightly (<= 1/3)
+        if (left <= right / 3 && right >= 2) return true;
+        if (right <= left / 3 && left >= 2) return true;
+        
         return false;
       }).sort((a: any, b: any) => (b.importanceScore || 0) - (a.importanceScore || 0));
 
@@ -352,9 +367,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let source = "live_query";
 
       // Serve from materialized homepageCache (Zero-CPU) for first page
-      // Covers both the default 'all' category AND the most common market (US)
+      // Covers only the default 'all' category AND 'GLOBAL' market to avoid returning mixed results for specific countries
       if (offset === 0 && !search && (!category || category === "all") &&
-          (!market || market === "GLOBAL" || market === "US")) {
+          (!req.query.market || req.query.market === "GLOBAL")) {
         try {
           const [cacheRow] = await db.select()
             .from(homepageCache)

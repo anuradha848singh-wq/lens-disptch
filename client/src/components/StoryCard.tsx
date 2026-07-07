@@ -17,6 +17,7 @@ import { PublisherLogo } from "./PublisherLogo";
 import { motion } from "framer-motion";
 import { InsightCaption } from "./InsightCaption";
 import { SharePanel } from "./SharePanel";
+import { Aperture } from "./Aperture";
 
 function proxyImage(url: string | null | undefined, width = 400): string | null {
   if (!url) return null;
@@ -49,7 +50,7 @@ function getSourceCount(article: ArticleWithDetails & { totalSources?: number })
 
 interface StoryCardProps {
   article: ArticleWithDetails;
-  variant?: "standard" | "featured" | "list" | "compact" | "slide" | "table-row" | "dense" | "sidebar-digest" | "briefing-side" | "ground-list" | "newspaper-row" | "news-index";
+  variant?: "standard" | "featured" | "list" | "compact" | "slide" | "table-row" | "dense" | "sidebar-digest" | "briefing-side" | "ground-list" | "newspaper-row" | "news-index" | "wide" | "most-polarizing";
   bookmarkedIds?: Set<string>;
   priority?: boolean;
 }
@@ -119,7 +120,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
   if (variant === "featured") {
     return (
       <motion.div 
-        className="group relative flex flex-col" 
+        className="group relative flex flex-col touch-feedback cursor-pointer" 
         data-testid={`story-${article.id}`}
         initial={{ opacity: 0, y: 20 }}
         whileInView={{ opacity: 1, y: 0 }}
@@ -129,7 +130,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
         <Link href={`/article/${article.id}`}>
              <div className="w-full aspect-[16/9] md:aspect-[2/1] bg-muted overflow-hidden rounded-xl border border-border/50 shadow-sm mb-5 relative">
                 {article.heroImageUrl && !article.heroImageUrl.includes("placeholder") ? (
-                  <img src={imageUrl || article.heroImageUrl} alt={article.title} className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-700" loading={priority ? "eager" : "lazy"} {...(priority ? { fetchPriority: "high" } : {})} />
+                  <img src={imageUrl || article.heroImageUrl} alt={article.title} className="w-full h-full object-cover  transition-transform duration-700" loading={priority ? "eager" : "lazy"} {...(priority ? { fetchPriority: "high" } : {})} />
                 ) : (
                   <div className="w-full h-full bg-secondary flex items-center justify-center">
                     <span className="text-6xl font-serif italic text-muted-foreground/40">{pubAbbr}</span>
@@ -153,7 +154,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                   <BlindspotBadge score={(article as any).blindspotScore} side={(article as any).blindspotSide} />
                 </div>
                 
-                <h2 className="text-2xl md:text-[32px] font-serif font-black leading-[1.1] text-foreground mb-3 group-hover:text-primary transition-colors">
+                <h2 className="text-2xl md:text-[32px] font-serif font-black leading-[1.1] text-foreground mb-3  transition-colors">
                   {article.title}
                 </h2>
                 
@@ -210,7 +211,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
         {/* Content Body */}
         <Link href={`/article/${article.id}`}>
           <div className="cursor-pointer">
-            <h4 className="text-[19px] font-display font-bold leading-[1.3] text-foreground group-hover:text-primary transition-colors mb-2.5 line-clamp-2">
+            <h4 className="text-[19px] font-display font-bold leading-[1.3] text-foreground  transition-colors mb-2.5 line-clamp-2">
               {article.title}
             </h4>
             <p className="text-sm font-sans text-muted-foreground leading-relaxed line-clamp-3 mb-4">
@@ -261,7 +262,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
           <div className="flex gap-4 cursor-pointer py-3 items-center">
             <div className="w-28 h-20 bg-muted flex-shrink-0 overflow-hidden rounded-md border border-border/40">
               {article.heroImageUrl && !article.heroImageUrl.includes("placeholder") ? (
-                <img src={proxyImage(article.heroImageUrl, 300) || article.heroImageUrl} alt={article.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                <img src={proxyImage(article.heroImageUrl, 300) || article.heroImageUrl} alt={article.title} className="w-full h-full object-cover  transition-transform duration-300" />
               ) : (
                 <div className="w-full h-full bg-secondary flex items-center justify-center">
                   <span className="text-lg font-serif italic text-muted-foreground/40">{pubAbbr}</span>
@@ -273,7 +274,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                 <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground truncate">{article.publisher?.name}</span>
                 <BiasChip bias={(article.bias || "center") as any} size="xs" />
               </div>
-              <h4 className="text-[15px] font-serif font-black leading-tight group-hover:text-primary transition-colors line-clamp-2 mb-1.5">{article.title}</h4>
+              <h4 className="text-[15px] font-serif font-black leading-tight  transition-colors line-clamp-2 mb-1.5">{article.title}</h4>
               <div className="flex items-center gap-3 mt-1">
                 <p className="text-[11px] text-muted-foreground font-bold tracking-tight">{timeAgo}</p>
                 {bias && (
@@ -297,7 +298,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
       <div className="group newspaper-digest-item px-1" data-testid={`story-${article.id}`}>
         <Link href={`/article/${article.id}`}>
           <div className="flex flex-col cursor-pointer">
-            <h4 className="newspaper-digest-title group-hover:underline">
+            <h4 className="newspaper-digest-title ">
               {article.title}
             </h4>
             <div className="newspaper-digest-meta flex items-center justify-between">
@@ -326,7 +327,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                  <span className="text-xs text-muted-foreground/60">·</span>
                  <span className="text-xs text-muted-foreground/60">{timeAgo}</span>
                </div>
-               <h4 className="text-[15px] font-serif font-black leading-[1.2] group-hover:text-primary transition-colors line-clamp-3 mb-1.5">{article.title}</h4>
+               <h4 className="text-[15px] font-serif font-black leading-[1.2]  transition-colors line-clamp-3 mb-1.5">{article.title}</h4>
                <div className="flex items-center gap-2">
                   <BiasChip bias={(article.bias || "center") as any} size="xs" />
                   <div className="h-1 flex-1 bg-border/40 rounded-full overflow-hidden max-w-[60px]">
@@ -353,7 +354,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
   /* ── DENSE (super compact minimal row, max density) ─────────── */
   if (variant === "dense") {
     return (
-      <div className="group border-b border-border/50 last:border-0 hover:bg-secondary/30 transition-colors" data-testid={`story-${article.id}`}>
+      <div className="group border-b border-border/50 last:border-0  transition-colors" data-testid={`story-${article.id}`}>
         <Link href={`/article/${article.id}`}>
           <div className="py-2.5 px-3 flex items-start gap-3 cursor-pointer">
             <div className="flex-shrink-0 flex flex-col items-center gap-1 w-8">
@@ -364,7 +365,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                 <span className="text-xs uppercase font-bold text-muted-foreground tracking-tight">{(article as any).publisherNames || article.publisher?.name || article.domain || "Source"}</span>
                 <span className="text-xs text-muted-foreground">{timeAgo}</span>
               </div>
-              <h4 className="text-[16px] font-serif font-black leading-snug line-clamp-2 group-hover:text-primary transition-colors">{article.title}</h4>
+              <h4 className="text-[16px] font-serif font-black leading-snug line-clamp-2  transition-colors">{article.title}</h4>
               <div className="flex items-center gap-2 mt-2">
                 <BiasChip bias={(article.bias || "center") as any} size="xs" />
                 <span className="text-xs font-bold text-muted-foreground">{sources} Perspectives</span>
@@ -384,7 +385,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
         <Link href={`/article/${article.id}`}>
           <div className="absolute inset-0 bg-muted">
             {article.heroImageUrl && !article.heroImageUrl.includes("placeholder") ? (
-              <img src={article.heroImageUrl} alt={article.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-400" />
+              <img src={article.heroImageUrl} alt={article.title} className="w-full h-full object-cover  transition-transform duration-400" />
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-zinc-700 to-zinc-900 flex items-center justify-center">
                 <span className="text-4xl font-black text-zinc-600">{pubAbbr}</span>
@@ -393,7 +394,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-black/10" />
           </div>
           <div className="absolute inset-0 p-4 flex flex-col justify-end text-white">
-            <h3 className="text-[15px] font-bold leading-snug mb-2 line-clamp-3 drop-shadow-md group-hover:text-blue-100 transition-colors">{article.title}</h3>
+            <h3 className="text-[15px] font-bold leading-snug mb-2 line-clamp-3 drop-shadow-md  transition-colors">{article.title}</h3>
             <div className="flex items-center gap-2 mb-2">
               <PublisherLogo name={article.publisher?.name || article.domain || "?"} domain={article.publisher?.website} size="xs" />
               <span className="text-xs font-bold text-white/90 drop-shadow-md truncate">{(article as any).publisherNames || article.publisher?.name || article.domain || "Source"}</span>
@@ -411,9 +412,9 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
   /* ── TABLE-ROW (deprecating in favor of newspaper-row) ─────────── */
   if (variant === "table-row") {
     return (
-      <tr className="group border-b border-border/50 hover:bg-secondary/40 transition-colors cursor-pointer" onClick={() => setLocation(`/article/${article.id}`)} data-testid={`story-${article.id}`}>
+      <tr className="group border-b border-border/50  transition-colors cursor-pointer" onClick={() => setLocation(`/article/${article.id}`)} data-testid={`story-${article.id}`}>
         <td className="py-2.5 px-3 min-w-[200px]">
-          <h4 className="text-[15px] font-semibold tracking-tight leading-snug line-clamp-2 group-hover:text-accent-editorial transition-colors">{article.title}</h4>
+          <h4 className="text-[15px] font-semibold tracking-tight leading-snug line-clamp-2  transition-colors">{article.title}</h4>
         </td>
         <td className="py-2.5 px-3 w-40">
           <div className="flex items-center gap-2">
@@ -458,7 +459,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
 
     return (
       <motion.div
-        className="group relative bg-white border border-border/60 rounded-xl hover:shadow-md transition-all cursor-pointer p-5 pl-7 flex flex-col justify-between min-h-[160px]"
+        className="group relative bg-white border border-border/60 rounded-xl  transition-all cursor-pointer p-5 pl-7 flex flex-col justify-between min-h-[160px]"
         onClick={() => setLocation(`/article/${article.id}`)}
         initial={{ opacity: 0, y: 10 }}
         whileInView={{ opacity: 1, y: 0 }}
@@ -482,7 +483,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
             </div>
 
             {/* Title & Excerpt */}
-            <h4 className="text-[20px] font-serif font-black leading-snug text-foreground mb-2 group-hover:text-primary transition-colors pr-4">
+            <h4 className="text-[20px] font-serif font-black leading-snug text-foreground mb-2  transition-colors pr-4">
               {article.title}
             </h4>
             <p className="text-[13px] text-muted-foreground leading-relaxed line-clamp-2 pr-4 font-sans">
@@ -504,7 +505,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                <span className="text-[10px] font-black text-foreground uppercase tracking-widest">
                  {sources} PERSPECTIVES
                </span>
-               <ChevronRight className="w-4 h-4 text-muted-foreground/40 group-hover:text-foreground transition-colors" />
+               <ChevronRight className="w-4 h-4 text-muted-foreground/40  transition-colors" />
              </div>
           </div>
         </div>
@@ -523,7 +524,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
     
     return (
       <motion.div
-        className="group relative bg-white border border-border/40 hover:border-border/80 transition-all flex h-full min-h-[160px] cursor-pointer overflow-hidden rounded-sm"
+        className="group relative bg-white border border-border/40  transition-all flex h-full min-h-[160px] cursor-pointer overflow-hidden rounded-sm"
         onClick={() => setLocation(`/article/${article.id}`)}
       >
         {/* Left Accent Border */}
@@ -542,7 +543,7 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                 <span className="text-[10px] text-muted-foreground/60">• {timeAgo}</span>
              </div>
              
-             <h3 className="font-serif text-[19px] font-black leading-tight group-hover:text-primary transition-colors line-clamp-2 mb-2">
+             <h3 className="font-serif text-[19px] font-black leading-tight  transition-colors line-clamp-2 mb-2">
                 {article.title}
              </h3>
              
@@ -569,28 +570,49 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
                 {sources} PERSPECTIVES
              </span>
              
-             <div className="mt-2 text-muted-foreground/30 group-hover:text-primary transition-colors">
+             <div className="mt-2 text-muted-foreground/30  transition-colors">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
              </div>
           </div>
         </div>
         
         {/* Bookmark Icon Overlay */}
-        <div className="absolute right-3 bottom-3 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute right-3 bottom-3 opacity-100 transition-opacity">
            <BookmarkButton article={article} bookmarkedIds={bookmarkedIds} />
         </div>
       </motion.div>
     );
   }
 
-  /* ── STANDARD (main grid card) ────────────────────────── */
-  const isDiversityPick = (article as any).isDiversityPick;
-  
+  /* ── DISPATCH CARDS (standard, wide, most-polarizing) ────────── */
+  const isMostPolarizing = variant === "most-polarizing" || (article as any).isDiversityPick;
+  const isWide = variant === "wide" || (sources >= 5 && (variant === "standard" || variant === undefined));
+  const actualVariant = isMostPolarizing ? "most-polarizing" : isWide ? "wide" : "standard";
+
+  const apertureSources = React.useMemo(() => {
+    const l = article.proOppositionCount || 0;
+    const c = article.neutralCount || 0;
+    const r = article.proEstablishmentCount || 0;
+    const res: { lean: "left" | "center" | "right" }[] = [];
+    for(let i=0; i<l; i++) res.push({lean: "left"});
+    for(let i=0; i<c; i++) res.push({lean: "center"});
+    for(let i=0; i<r; i++) res.push({lean: "right"});
+    if (res.length === 0) {
+      if (article.bias === "pro_opposition") res.push({lean: "left"});
+      else if (article.bias === "pro_establishment") res.push({lean: "right"});
+      else res.push({lean: "center"});
+    }
+    return res;
+  }, [article]);
+
   return (
     <motion.div
       className={cn(
-        "group bg-card border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col cursor-pointer h-full relative",
-        isDiversityPick ? "border-purple-500/50 dark:border-purple-400/50 ring-1 ring-purple-500/20" : "border-border/50"
+        "group relative flex flex-col bg-[var(--card-surface)] border transition-all cursor-pointer touch-feedback",
+        actualVariant === "most-polarizing" 
+          ? "border-[var(--wire-red)] border-[1.5px]" 
+          : "border-[var(--hairline)] ",
+        actualVariant === "wide" && "md:col-span-2 md:flex-row"
       )}
       onClick={() => setLocation(`/article/${article.id}`)}
       variants={{
@@ -598,111 +620,88 @@ export const StoryCard = React.memo(function StoryCard({ article, variant = "sta
         show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: "easeOut" } }
       }}
     >
-      {isDiversityPick && (
-        <div className="absolute top-0 right-0 z-10 bg-purple-500 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-bl-lg shadow-sm">
-          Outside Your Bubble
-        </div>
+      {/* Corner Registration Marks for Polarizing */}
+      {actualVariant === "most-polarizing" && (
+        <>
+          <div className="absolute top-0 left-0 w-2 h-2 border-t-[1.5px] border-l-[1.5px] border-[var(--wire-red)] -translate-x-[1.5px] -translate-y-[1.5px]" />
+          <div className="absolute top-0 right-0 w-2 h-2 border-t-[1.5px] border-r-[1.5px] border-[var(--wire-red)] translate-x-[1.5px] -translate-y-[1.5px]" />
+          <div className="absolute bottom-0 left-0 w-2 h-2 border-b-[1.5px] border-l-[1.5px] border-[var(--wire-red)] -translate-x-[1.5px] translate-y-[1.5px]" />
+          <div className="absolute bottom-0 right-0 w-2 h-2 border-b-[1.5px] border-r-[1.5px] border-[var(--wire-red)] translate-x-[1.5px] translate-y-[1.5px]" />
+        </>
       )}
-      {/* Image with Floating Badge */}
-      <div className="aspect-[16/10] bg-muted overflow-hidden relative">
+
+      {/* Image Container */}
+      <div className={cn(
+        "relative bg-[var(--paper)] overflow-hidden shrink-0",
+        actualVariant === "wide" ? "w-full md:w-[40%] aspect-[16/9] md:aspect-auto" : "w-full aspect-[16/10]"
+      )}>
         {article.heroImageUrl && !article.heroImageUrl.includes("placeholder") ? (
           <img
             src={imageUrl || article.heroImageUrl}
             alt={article.title}
-            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500"
+            className="w-full h-full object-cover grayscale-[20%]  transition-all duration-500"
             loading={priority ? "eager" : "lazy"}
             {...(priority ? { fetchPriority: "high" } : {})}
           />
         ) : (
-          <div className="w-full h-full bg-secondary/30 flex items-center justify-center font-serif italic text-muted-foreground/30 text-4xl">
+          <div className="w-full h-full bg-[var(--paper)] flex items-center justify-center font-newsreader italic text-[var(--ink-muted)] text-4xl">
             {pubAbbr}
           </div>
         )}
         
-        {/* Floating Source Badge */}
-        {sources > 1 && (
-          <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-sm text-white text-[9px] font-black px-2 py-1 rounded-sm tracking-widest uppercase flex items-center gap-1.5 border border-white/10 z-10">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-            {sources} SOURCES
-          </div>
-        )}
+        {/* Postmark Stamp */}
+        <div className="absolute top-3 right-3 bg-[var(--card-surface)] border-[1.5px] border-[var(--ink)] w-9 h-9 rounded-full flex flex-col items-center justify-center rotate-[-9deg] z-10 shadow-sm translate-x-2 -translate-y-2">
+          <span className="font-plex-mono text-[14px] font-bold leading-none text-[var(--ink)]">{sources}</span>
+        </div>
       </div>
 
       {/* Content Body */}
-      <div className="p-4 flex flex-col flex-1 relative">
-        {/* Meta Row */}
-        <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <span className="text-[10px] font-black uppercase tracking-widest text-red-600">
-            {(article.categories?.[0]?.name || "GENERAL").toUpperCase()}
-          </span>
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-tight">
-            {article.publisher?.name}
-          </span>
-          <span className="text-[10px] text-muted-foreground/60">• {timeAgo}</span>
+      <div className={cn(
+        "p-4 md:p-5 flex flex-col flex-1",
+        actualVariant === "wide" && "justify-center"
+      )}>
+        
+        {actualVariant === "most-polarizing" && (
+          <div className="text-eyebrow text-[var(--wire-red)] mb-2 font-bold flex items-center gap-2">
+            <div className="w-1.5 h-1.5 bg-[var(--wire-red)] rounded-full animate-pulse" />
+            MOST POLARIZING TODAY
+          </div>
+        )}
+
+        {/* Eyebrow / Dateline */}
+        <div className="text-eyebrow text-[var(--ink-muted)] mb-3">
+          {(article.categories?.[0]?.name || "GENERAL")} · {article.publisher?.name || "SOURCE"} · {formatDistanceToNow(new Date(article.publishedAt || Date.now()), { addSuffix: false }).toUpperCase()} AGO
         </div>
 
         {/* Title */}
-        <h3 className="font-serif text-[20px] font-black leading-tight group-hover:text-primary transition-colors mb-2">
+        <h3 className={cn(
+          "text-card-headline text-[var(--ink)] mb-2  transition-colors line-clamp-3",
+          actualVariant === "wide" && "text-[22px] leading-[1.25]"
+        )}>
           {article.title}
         </h3>
 
-        {/* Excerpt */}
-        {article.excerpt && (
-          <p className="font-serif text-[15px] leading-relaxed text-muted-foreground/90 line-clamp-4 mb-4">
-            {article.excerpt}
-          </p>
-        )}
+        {/* Dek text */}
+        <p className="text-dek text-[var(--ink-muted)] line-clamp-2 mb-4">
+          {article.excerpt || "Full coverage of this developing story continues with updates from multiple world sources."}
+        </p>
 
-        {derivedDiversity > 0 || diversityScore > 0 ? (
-          <div className="mt-2 space-y-1 mb-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-black">Coverage Mix</span>
-              <span className="text-[10px] font-bold text-muted-foreground">{Math.round((derivedDiversity / Math.log(3)) * 100) || diversityScore}% diverse</span>
-            </div>
-            <div className="flex h-1.5 rounded-full overflow-hidden gap-px">
-              {(() => {
-                const total = (article.proEstablishmentCount || 0) + (article.neutralCount || 0) + (article.proOppositionCount || 0);
-                if (total === 0) return null;
-                const lPct = Math.round(((article.proOppositionCount || 0) / total) * 100);
-                const cPct = Math.round(((article.neutralCount || 0) / total) * 100);
-                const rPct = 100 - lPct - cPct;
-                return (
-                  <>
-                    <div className="bias-left h-full transition-all" style={{ width: `${lPct}%` }} />
-                    <div className="bias-center h-full transition-all" style={{ width: `${cPct}%` }} />
-                    <div className="bias-right h-full transition-all" style={{ width: `${rPct}%` }} />
-                  </>
-                );
-              })()}
-            </div>
-            <div className="flex justify-between text-[9px] font-bold">
-              <span className="bias-left-text">{article.proOppositionCount || 0}L</span>
-              <span className="text-muted-foreground">{article.neutralCount || 0}C</span>
-              <span className="bias-right-text">{article.proEstablishmentCount || 0}R</span>
-            </div>
-            <InsightCaption
-              proEstablishmentCount={article.proEstablishmentCount || 0}
-              proOppositionCount={article.proOppositionCount || 0}
-              regionalAlignedCount={(article as any).regionalAlignedCount || 0}
-              neutralCount={article.neutralCount || 0}
-              totalSources={sources}
-              className="mt-1"
-            />
-          </div>
-        ) : (
-          <div className="h-1 w-full bg-secondary/30 rounded-full overflow-hidden flex mt-2 mb-3">
-             <div className={`h-full bias-${article.bias || "center"}`} style={{ width: "100%" }} />
-          </div>
-        )}
+        {/* Dashed "perforation" divider */}
+        <div className="w-full border-t border-dashed border-[var(--hairline-dashed)] my-4" />
 
-        <div className="mt-auto flex items-center justify-between pt-1 border-t border-border/20">
-           <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">{sources} {sources === 1 ? 'Perspective' : 'Perspectives'}</span>
-           {/* Share + Bookmark row */}
-           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-             <div onClick={(e) => e.stopPropagation()}>
-               <SharePanel articleId={article.id} title={article.title} className="" />
-             </div>
-           </div>
+        {/* Aperture Footer */}
+        <div className="mt-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Aperture sources={apertureSources as any} diversityScore={diversityScore} size="inline" />
+            <span className="text-mono-metadata text-[var(--ink-muted)]">
+              {Math.round(diversityScore)}% DIVERSE · {sources} SOURCES
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+            <BookmarkButton article={article} bookmarkedIds={bookmarkedIds} />
+            <SharePanel articleId={article.id} title={article.title} />
+          </div>
         </div>
       </div>
     </motion.div>

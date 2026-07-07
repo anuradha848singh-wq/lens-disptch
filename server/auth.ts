@@ -77,3 +77,14 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
     next();
   }
 }
+
+export function requirePremium(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  if (!user.isPremium && user.role !== "admin") {
+    return res.status(402).json({ error: "Payment Required. Premium subscription required." });
+  }
+  next();
+}

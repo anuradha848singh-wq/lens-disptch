@@ -205,14 +205,18 @@ async function cleanupPublishers() {
       }
       seenDomains.add(matchedDomain);
       await db.update(publishers).set({
-        biasRating: info.bias as any,
+        biasRating: info.narrativeStance as any, // Legacy field
+        politicalAlignment: info.politicalAlignment as any,
+        narrativeStance: info.narrativeStance as any,
+        region: info.region as any,
+        country: info.country || "US",
         factualityRating: info.factuality as any,
         ownerName: info.ownerName,
         ownerType: info.ownerType as any,
         active: true,
       }).where(eq(publishers.id, pub.id));
       updated++;
-      console.log(`  ✅ ${pub.name} → ${info.bias} [${matchedDomain}]`);
+      console.log(`  ✅ ${pub.name} → ${info.politicalAlignment}/${info.narrativeStance} [${matchedDomain}]`);
     } else if (matchedDomain && seenDomains.has(matchedDomain)) {
       // Duplicate — deactivate
       await db.update(publishers).set({ active: false }).where(eq(publishers.id, pub.id));

@@ -1,24 +1,21 @@
-import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { type ArticleWithDetails } from "@shared/schema";
-import { Badge } from "@/components/ui/badge";
-import { motion, AnimatePresence } from "framer-motion";
-import { PublisherLogo } from "./PublisherLogo";
-import { proxyImage, gradientFallback } from "@/lib/image-utils";
-import { formatDistanceToNow } from "date-fns";
+import { motion } from "framer-motion";
+import { proxyImage } from "@/lib/image-utils";
+import { formatDistanceToNow, format } from "date-fns";
+import { Aperture } from "./Aperture";
 
 interface EditorialHeroProps {
   articles: ArticleWithDetails[];
-  bookmarkedIds?: Set<string>;
 }
 
 function HeroSkeleton() {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
-      <div className="lg:col-span-8 bg-muted min-h-[460px] rounded-xl animate-shimmer" />
-      <div className="lg:col-span-4 flex flex-col gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8 border border-[var(--hairline)]">
+      <div className="lg:col-span-2 bg-muted min-h-[460px] animate-shimmer" />
+      <div className="lg:col-span-1 flex flex-col gap-4 p-4 border-l border-dashed border-[var(--hairline-dashed)]">
         {[1, 2, 3].map(i => (
-          <div key={i} className="flex-1 min-h-[130px] rounded-xl border border-border overflow-hidden">
+          <div key={i} className="flex-1 min-h-[100px]">
             <div className="h-full bg-muted animate-shimmer" />
           </div>
         ))}
@@ -27,247 +24,111 @@ function HeroSkeleton() {
   );
 }
 
-export function EditorialHero({ articles, bookmarkedIds }: EditorialHeroProps) {
+export function EditorialHero({ articles }: EditorialHeroProps) {
   if (!articles || articles.length === 0) return <HeroSkeleton />;
 
-  // Dynamically allocate articles:
-  // Show up to 5 articles in the slider, and the next up to 3 articles as side stories.
-  const sliderCount = Math.min(5, Math.max(1, articles.length - 3));
-  const sliderArticles = articles.slice(0, sliderCount);
-  const sideStories = articles.slice(sliderArticles.length, sliderArticles.length + 3);
+  const featureArticle = articles[0];
+  const wireArticles = articles.slice(1, 6);
 
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [isHovered, setIsHovered] = useState(false);
-
-  const currentArticle = sliderArticles[activeIndex] || sliderArticles[0];
-
-  // Preload first hero image for LCP optimization
-  const firstImageUrl = articles[0]?.heroImageUrl
-    ? (proxyImage(articles[0].heroImageUrl, 1200) || articles[0].heroImageUrl)
+  const activeImageUrl = featureArticle?.heroImageUrl
+    ? (proxyImage(featureArticle.heroImageUrl, 1200) || featureArticle.heroImageUrl)
     : undefined;
 
-  useEffect(() => {
-    if (!firstImageUrl) return;
-    const link = document.createElement("link");
-    link.rel = "preload";
-    link.as = "image";
-    link.href = firstImageUrl;
-    document.head.appendChild(link);
-    return () => {
-      if (document.head.contains(link)) document.head.removeChild(link);
-    };
-  }, [firstImageUrl]);
-
-  // Autoplay functionality
-  useEffect(() => {
-    if (sliderArticles.length <= 1 || isHovered) return;
-
-    const interval = setInterval(() => {
-      setActiveIndex((prev) => (prev + 1) % sliderArticles.length);
-    }, 6000);
-
-    return () => clearInterval(interval);
-  }, [sliderArticles.length, isHovered]);
-
-  const activeImageUrl = currentArticle?.heroImageUrl
-    ? (proxyImage(currentArticle.heroImageUrl, 1200) || currentArticle.heroImageUrl)
-    : undefined;
-
-  const currentArticleTimeAgo = currentArticle?.publishedAt
-    ? formatDistanceToNow(new Date(currentArticle.publishedAt), { addSuffix: true })
-    : "recently";
+  // Compute diversity and sources for aperture
+  const sources = (featureArticle as any).totalSources || 1;
+  const diversityScore = (featureArticle as any).shannonDiversity || 0;
+  
+  const l = featureArticle.proOppositionCount || 0;
+  const c = featureArticle.neutralCount || 0;
+  const r = featureArticle.proEstablishmentCount || 0;
+  const apertureSources: any[] = [];
+  for(let i=0; i<l; i++) apertureSources.push({lean: "left"});
+  for(let i=0; i<c; i++) apertureSources.push({lean: "center"});
+  for(let i=0; i<r; i++) apertureSources.push({lean: "right"});
+  if (apertureSources.length === 0) {
+    apertureSources.push({lean: "center"});
+  }
 
   return (
     <motion.div
-      className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6"
-      initial="hidden"
-      whileInView="show"
+      className="grid grid-cols-1 lg:grid-cols-3 bg-[var(--card-surface)] border border-[var(--hairline)] mb-6"
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-80px" }}
-      variants={{
-        hidden: { opacity: 0 },
-        show: { opacity: 1, transition: { staggerChildren: 0.12 } }
-      }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
     >
-      {/* ── Main Hero Story (Carousel) — 8 columns ─────────────────────────── */}
-      <div
-        className="lg:col-span-8 group relative flex flex-col overflow-hidden rounded-xl shadow-md hover:shadow-2xl transition-shadow duration-300 bg-black min-h-[460px]"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-      >
+      {/* ── Main Hero Story (Left: 2 columns) ─────────────────────────── */}
+      <div className="lg:col-span-2 relative flex flex-col overflow-hidden">
         <Link
-          href={`/article/${currentArticle.id}`}
-          className="absolute inset-0 cursor-pointer flex flex-col justify-end text-white z-10"
+          href={`/article/${featureArticle.id}`}
+          className="cursor-pointer flex flex-col h-full group"
         >
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeIndex}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.4 }}
-              className="absolute inset-0 w-full h-full"
-              role="article"
-            >
-              {activeImageUrl ? (
-                <img
-                  src={activeImageUrl}
-                  alt={currentArticle.title}
-                  className="absolute inset-0 w-full h-full object-cover group-hover:scale-[1.025] transition-transform duration-700 opacity-85"
-                  loading="eager"
-                  fetchPriority="high"
-                />
-              ) : (
-                <div
-                  className="absolute inset-0 w-full h-full"
-                  style={{ background: gradientFallback(currentArticle.id) }}
-                />
-              )}
-
-              {/* Layered gradient for strong text legibility */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/55 to-black/5" />
-              <div className="absolute inset-0 bg-gradient-to-r from-black/75 via-black/35 to-transparent" />
-
-              {/* Content Overlay */}
-              <div className="absolute inset-0 p-7 md:p-10 flex flex-col justify-end text-white z-10">
-                <div className="flex items-center gap-3 mb-4 flex-wrap">
-                  <Badge className="bg-accent-editorial hover:bg-accent-editorial text-white font-black px-3 py-1 rounded-sm border-none text-[9px] tracking-[.2em] uppercase shadow-sm">
-                    TOP STORY
-                  </Badge>
-                  {currentArticle.categories?.[0]?.name && (
-                    <Badge variant="outline" className="border-white/30 text-white/80 bg-white/10 backdrop-blur-sm text-[9px] font-black uppercase tracking-widest">
-                      {currentArticle.categories[0].name}
-                    </Badge>
-                  )}
-                  <div className="flex items-center gap-2 text-[11px] font-bold text-white/80 uppercase tracking-widest">
-                    <PublisherLogo name={currentArticle.publisher?.name ?? "??"} domain={currentArticle.publisher?.website} size="xs" />
-                    <span>{currentArticle.publisher?.name}</span>
-                    <span className="text-white/40">·</span>
-                    <span className="text-white/60">{currentArticleTimeAgo}</span>
-                  </div>
-                </div>
-
-                <h2 className="font-serif text-2xl md:text-[38px] font-black leading-[1.1] tracking-tight mb-3 group-hover:text-red-50 transition-colors line-clamp-3 drop-shadow-sm">
-                  {currentArticle.title}
-                </h2>
-
-                {currentArticle.excerpt && (
-                  <p className="text-base text-white/75 font-sans leading-relaxed line-clamp-2 max-w-2xl mb-8">
-                    {currentArticle.excerpt}
-                  </p>
-                )}
-              </div>
-            </motion.div>
-          </AnimatePresence>
-        </Link>
-
-        {/* Carousel controls - Dots indicator */}
-        {sliderArticles.length > 1 && (
-          <div className="absolute bottom-6 left-7 md:left-10 z-20 flex items-center gap-1.5">
-            {sliderArticles.map((_, idx) => (
-              <button
-                key={idx}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setActiveIndex(idx);
-                }}
-                className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
-                  idx === activeIndex 
-                    ? "w-8 bg-accent-editorial" 
-                    : "w-2 bg-white/40 hover:bg-white/70"
-                }`}
-                aria-label={`Go to slide ${idx + 1}`}
+          {/* Top Image + Aperture Overlay */}
+          <div className="relative w-full aspect-[16/9] md:aspect-[2/1] bg-[var(--paper)] overflow-hidden shrink-0">
+            {activeImageUrl ? (
+              <img
+                src={activeImageUrl}
+                alt={featureArticle.title}
+                className="w-full h-full object-cover grayscale-[15%]  transition-all duration-700"
+                loading="eager"
+                fetchPriority="high"
               />
-            ))}
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-newsreader italic text-[var(--ink-muted)] text-4xl">
+                {featureArticle.publisher?.name || "Dispatch"}
+              </div>
+            )}
+            
+            <div className="absolute top-4 left-4 z-10 flex items-center justify-center bg-[var(--card-surface)] border border-[var(--hairline)] p-2 shadow-md">
+              <Aperture sources={apertureSources} diversityScore={diversityScore} size="feature" />
+            </div>
           </div>
-        )}
+          
+          {/* Divider */}
+          <div className="w-full border-t border-dashed border-[var(--hairline-dashed)]" />
 
-        {/* Carousel controls - Arrow navigation buttons (fade in on hover) */}
-        {sliderArticles.length > 1 && (
-          <>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setActiveIndex((prev) => (prev - 1 + sliderArticles.length) % sliderArticles.length);
-              }}
-              className="absolute left-6 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full border border-white/25 flex items-center justify-center text-white/70 bg-black/10 hover:bg-white/20 transition-all duration-200 backdrop-blur-sm opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 cursor-pointer"
-              aria-label="Previous slide"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-            </button>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setActiveIndex((prev) => (prev + 1) % sliderArticles.length);
-              }}
-              className="absolute right-6 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full border border-white/25 flex items-center justify-center text-white/70 bg-black/10 hover:bg-white/20 transition-all duration-200 backdrop-blur-sm opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 cursor-pointer"
-              aria-label="Next slide"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </button>
-          </>
-        )}
+          {/* Content Block */}
+          <div className="p-5 md:p-6 lg:p-8 flex flex-col flex-1 bg-[var(--card-surface)]">
+            <div className="text-eyebrow text-[var(--ink-muted)] mb-3 flex items-center gap-2">
+              <span className="font-bold text-[var(--ink)]">TOP DISPATCH</span>
+              <span>·</span>
+              <span>{Math.round(diversityScore)}% DIVERSE</span>
+            </div>
+            
+            <h2 className="text-hero-headline text-[var(--ink)]  transition-colors mb-4 line-clamp-3">
+              {featureArticle.title}
+            </h2>
+            
+            <p className="text-dek text-[var(--ink-muted)] line-clamp-3 max-w-3xl">
+              {featureArticle.excerpt || "Full coverage of this developing story continues with updates from multiple world sources."}
+            </p>
+          </div>
+        </Link>
       </div>
 
-      {/* ── Side Stories — 4 columns ─────────────────────────────── */}
-      <div className="lg:col-span-4 flex flex-col gap-4">
-        {sideStories.map((a) => {
-          const timeAgo = a.publishedAt
-            ? formatDistanceToNow(new Date(a.publishedAt), { addSuffix: true })
-            : "recently";
-          const thumbUrl = a.heroImageUrl ? proxyImage(a.heroImageUrl, 160) : null;
-
-          return (
-            <Link key={a.id} href={`/article/${a.id}`} className="flex-1 min-h-0">
-              <motion.div
-                className="h-full glass-card p-4 group cursor-pointer flex gap-4 min-h-[130px]"
-                variants={{
-                  hidden: { opacity: 0, x: 16 },
-                  show: { opacity: 1, x: 0, transition: { duration: 0.35 } }
-                }}
-              >
-                <div className="flex-1 min-w-0 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                      {a.categories?.[0]?.name && (
-                        <span className="text-[9px] font-black uppercase tracking-widest text-accent-editorial">
-                          {a.categories[0].name}
-                        </span>
-                      )}
-                      <span className="text-[9px] text-muted-foreground/60">· {timeAgo}</span>
-                    </div>
-                    <h3 className="font-serif text-[15px] font-bold leading-snug group-hover:text-primary transition-colors line-clamp-3">
-                      {a.title}
-                    </h3>
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <PublisherLogo name={a.publisher?.name || "Source"} domain={a.publisher?.website} size="xs" />
-                    <span className="text-[10px] font-bold uppercase tracking-tight text-muted-foreground truncate">
-                      {a.publisher?.name}
-                    </span>
-                  </div>
+      {/* ── WIRE FEED (Right: 1 column) ─────────────────────────────── */}
+      <div className="lg:col-span-1 border-t lg:border-t-0 lg:border-l border-dashed border-[var(--hairline-dashed)] flex flex-col bg-[var(--card-surface)]">
+        <div className="p-4 border-b border-[var(--hairline)]">
+          <h3 className="font-plex-mono text-[13px] font-bold tracking-widest uppercase text-[var(--ink)]">
+            Wire Feed
+          </h3>
+        </div>
+        
+        <div className="flex flex-col h-full overflow-y-auto custom-scrollbar">
+          {wireArticles.map((article, idx) => (
+            <Link key={article.id} href={`/article/${article.id}`}>
+              <div className="p-4 cursor-pointer group  transition-colors border-b border-dashed border-[var(--hairline-dashed)] last:border-none">
+                <div className="text-mono-metadata text-[var(--ink-muted)] mb-1.5 flex items-center justify-between">
+                  <span>{format(new Date(article.publishedAt || Date.now()), 'HH:mm')} {(article.publisher?.country === "IN" ? "IST" : "UTC")}</span>
+                  <span className="text-[9px] uppercase tracking-wider">{article.publisher?.name}</span>
                 </div>
-
-                {thumbUrl && (
-                  <div className="w-[88px] h-[70px] bg-muted rounded-lg overflow-hidden flex-shrink-0 relative self-center">
-                    <img
-                      src={thumbUrl}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      alt={a.title}
-                      loading="lazy"
-                    />
-                  </div>
-                )}
-              </motion.div>
+                <h4 className="font-public-sans text-[15px] font-semibold leading-[1.4] text-[var(--ink)]  transition-colors line-clamp-3">
+                  {article.title}
+                </h4>
+              </div>
             </Link>
-          );
-        })}
+          ))}
+        </div>
       </div>
     </motion.div>
   );

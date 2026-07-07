@@ -124,97 +124,165 @@ export function CoverageBarChart({ left, center, right }: { left: number, center
   );
 }
 
-// 3. Media Bias Distribution Detail List
-export function MediaBiasDistribution({ sources, onAllSourcesClick }: { sources: any[], onAllSourcesClick?: () => void }) {
-  // Aggregate sources by publisher to match screenshots
-  const publisherMap = new Map<string, { count: number, bias: string, url: string, latestPublishedAt: string | null }>();
-  sources.forEach(s => {
-    const name = s.source_name || s.sourceName || "Unknown";
-    const pubDate = s.publishedAt || s.published_at || null;
-    if (!publisherMap.has(name)) {
-      publisherMap.set(name, { 
-        count: 0, 
-        bias: s.bias_label || s.bias || "center", 
-        url: s.url,
-        latestPublishedAt: pubDate
-      });
-    }
-    const entry = publisherMap.get(name)!;
-    entry.count++;
-    if (pubDate && (!entry.latestPublishedAt || new Date(pubDate) > new Date(entry.latestPublishedAt))) {
-      entry.latestPublishedAt = pubDate;
-    }
-  });
-  
-  const pubList = Array.from(publisherMap.entries())
-    .map(([name, data]) => ({ name, ...data }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 6);
+// 3. Media Bias Distribution Detail List (Publisher Bubble Stack columns)
+export function MediaBiasDistribution({ sources }: { sources: any[] }) {
+  // Group sources by derived bias rating
+  const grouped = useMemo(() => {
+    const left: any[] = [];
+    const center: any[] = [];
+    const right: any[] = [];
+    const untracked: any[] = [];
 
-  if (pubList.length === 0) return null;
+    for (const s of sources) {
+      const pub = s.publisher;
+      const name = pub?.name || s.sourceName || s.source_name || "Unknown";
+      const domain = pub?.website || s.url;
+      const bias = s.bias || pub?.biasRating || "center";
+      
+      const entry = { name, domain, bias };
+      
+      if (!pub || !pub.biasRating || pub.biasRating === "unknown") {
+        untracked.push(entry);
+      } else if (bias === "pro_opposition" || bias === "left") {
+        left.push(entry);
+      } else if (bias === "pro_establishment" || bias === "right") {
+        right.push(entry);
+      } else {
+        center.push(entry);
+      }
+    }
+    return { left, center, right, untracked };
+  }, [sources]);
+
+  const total = grouped.left.length + grouped.center.length + grouped.right.length || 1;
+  const lPct = Math.round((grouped.left.length / total) * 100);
+  const cPct = Math.round((grouped.center.length / total) * 100);
+  const rPct = 100 - lPct - cPct;
+
+  // Determine dominant bias for the subtitle
+  const dominant = useMemo(() => {
+    const max = Math.max(lPct, cPct, rPct);
+    if (max === cPct) return `${cPct}% of the sources are Center`;
+    if (max === lPct) return `${lPct}% of the sources are Left Leaning`;
+    return `${rPct}% of the sources are Right Leaning`;
+  }, [lPct, cPct, rPct]);
+
+  // Max 4 logo bubbles shown per column
+  const limit = 4;
+  const leftShown = grouped.left.slice(0, limit);
+  const leftExtra = grouped.left.length > limit ? grouped.left.length - limit : 0;
+
+  const centerShown = grouped.center.slice(0, limit);
+  const centerExtra = grouped.center.length > limit ? grouped.center.length - limit : 0;
+
+  const rightShown = grouped.right.slice(0, limit);
+  const rightExtra = grouped.right.length > limit ? grouped.right.length - limit : 0;
+
+  // Untracked max 10 icons
+  const untrackedShown = grouped.untracked.slice(0, 10);
 
   return (
-    <div className="w-full mt-2">
-      <div className="space-y-4">
-        {pubList.map((pub, i) => {
-          const s = sources.find(src => (src.sourceName || src.source_name || src.publisherName) === pub.name) || { url: pub.url };
-          const name = pub.name !== "Unknown" ? pub.name : (() => {
-            try { return new URL(s.url || '').hostname.replace('www.',''); }
-            catch { return 'Unknown'; }
-          })();
-          const totalStories = pub.count;
-          const biasPerc = Math.round((pub.count / sources.length) * 100) || 1;
-          const isLeft = pub.bias.toLowerCase().includes("left");
-          const isRight = pub.bias.toLowerCase().includes("right");
-          const isCenter = !isLeft && !isRight;
-          
-          return (
-            <div key={i} className="flex items-center gap-3 group px-2 py-1.5 hover:bg-secondary/40 rounded-lg transition-colors cursor-pointer">
-              {/* Publisher Avatar */}
-              <PublisherLogo name={name} domain={pub.url} size="md" className="w-8 h-8 shadow-sm shrink-0 bg-card" />
-              
-              {/* Publisher Name & Time */}
-              <div className="flex-1 min-w-0">
-                <h5 className="text-[13px] font-bold text-foreground truncate group-hover:text-primary">{name}</h5>
-                <p className="text-[10px] text-muted-foreground font-medium">
-                  {pub.latestPublishedAt 
-                    ? formatDistanceToNow(new Date(pub.latestPublishedAt), { addSuffix: true })
-                    : 'Recently'}
-                </p>
-              </div>
-              
-              {/* Stats Bar */}
-              <div className="flex items-center gap-3 shrink-0">
-                <span className="text-xs font-bold text-muted-foreground w-6 text-right">{biasPerc}%</span>
-                <div className="flex flex-col items-center gap-1 w-12">
-                   {/* Tiny stacked bar */}
-                   <div className="w-full h-1.5 flex rounded-full overflow-hidden bg-secondary">
-                     <div className={`h-full ${isLeft ? 'bg-blue-500 w-[60%]' : 'bg-transparent'}`} />
-                     <div className={`h-full ${isCenter ? 'bg-muted-foreground w-[80%]' : 'bg-transparent'}`} />
-                     <div className={`h-full ${isRight ? 'bg-red-500 w-[70%]' : 'bg-transparent'}`} />
-                   </div>
-                   <div className="flex w-full justify-between px-0.5">
-                     <span className={`w-1 h-1 rounded-full ${isLeft ? 'bg-blue-500' : 'bg-transparent'}`} />
-                     <span className={`w-1 h-1 rounded-full ${isRight ? 'bg-red-500' : 'bg-transparent'}`} />
-                   </div>
-                </div>
-                {/* Total stories counts */}
-                <div className="flex flex-col items-end">
-                   <span className="text-[11px] font-bold text-foreground">{totalStories}</span>
-                   <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-widest">Stories</span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-1">
+        <h4 className="text-[13px] font-serif font-black text-foreground uppercase tracking-wider flex items-center gap-1.5">
+          Bias Distribution
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-muted-foreground"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+        </h4>
       </div>
-      
-      <button 
-        className="w-full mt-6 py-2.5 rounded-xl border-2 border-border text-xs font-bold uppercase tracking-widest text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
-        onClick={onAllSourcesClick}
-      >
-        View All Sources
-      </button>
+      <p className="text-[11px] text-muted-foreground mb-3 font-serif font-medium">{dominant}</p>
+
+      {/* Spectrum Bar Chart */}
+      <div className="h-4 flex items-center w-full rounded-sm overflow-hidden mb-5 text-[8px] font-black text-white uppercase tracking-wider select-none font-sans">
+        {lPct > 0 && (
+          <div className="h-full bg-[#e11d48] flex items-center justify-center transition-all" style={{ width: `${lPct}%` }}>
+            {lPct >= 15 && `L ${lPct}%`}
+          </div>
+        )}
+        {cPct > 0 && (
+          <div className="h-full bg-[#71717a] flex items-center justify-center transition-all" style={{ width: `${cPct}%` }}>
+            {cPct >= 15 && `C ${cPct}%`}
+          </div>
+        )}
+        {rPct > 0 && (
+          <div className="h-full bg-[#2563eb] flex items-center justify-center transition-all" style={{ width: `${rPct}%` }}>
+            {rPct >= 15 && `R ${rPct}%`}
+          </div>
+        )}
+      </div>
+
+      {/* Bubble Columns Stack */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        {/* Left Leaning column (rose color theme) */}
+        <div className="flex flex-col items-center bg-rose-50/40 dark:bg-rose-950/5 border border-rose-100/50 dark:border-rose-950/20 rounded-xl py-3 px-1 gap-2.5">
+          <span className="text-[9px] font-black uppercase text-rose-600 tracking-wider">Left</span>
+          <div className="flex flex-col items-center gap-1.5 w-full">
+            {leftShown.map((pub, idx) => (
+              <PublisherLogo key={idx} name={pub.name} domain={pub.domain} size="sm" className="w-7 h-7 rounded-full border-2 border-white dark:border-zinc-800 shadow-sm shrink-0" />
+            ))}
+            {leftExtra > 0 && (
+              <div className="w-7 h-7 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 flex items-center justify-center text-[9px] font-black border-2 border-white dark:border-zinc-800 shadow-sm shrink-0">
+                +{leftExtra}
+              </div>
+            )}
+            {grouped.left.length === 0 && (
+              <span className="text-[9px] text-muted-foreground italic my-4">—</span>
+            )}
+          </div>
+        </div>
+
+        {/* Center column (zinc gray theme) */}
+        <div className="flex flex-col items-center bg-zinc-50/40 dark:bg-zinc-950/5 border border-zinc-200/50 dark:border-zinc-800/20 rounded-xl py-3 px-1 gap-2.5">
+          <span className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Center</span>
+          <div className="flex flex-col items-center gap-1.5 w-full">
+            {centerShown.map((pub, idx) => (
+              <PublisherLogo key={idx} name={pub.name} domain={pub.domain} size="sm" className="w-7 h-7 rounded-full border-2 border-white dark:border-zinc-800 shadow-sm shrink-0" />
+            ))}
+            {centerExtra > 0 && (
+              <div className="w-7 h-7 rounded-full bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 flex items-center justify-center text-[9px] font-black border-2 border-white dark:border-zinc-800 shadow-sm shrink-0">
+                +{centerExtra}
+              </div>
+            )}
+            {grouped.center.length === 0 && (
+              <span className="text-[9px] text-muted-foreground italic my-4">—</span>
+            )}
+          </div>
+        </div>
+
+        {/* Right Leaning column (blue theme) */}
+        <div className="flex flex-col items-center bg-blue-50/40 dark:bg-blue-950/5 border border-blue-100/50 dark:border-blue-950/20 rounded-xl py-3 px-1 gap-2.5">
+          <span className="text-[9px] font-black uppercase text-blue-600 tracking-wider">Right</span>
+          <div className="flex flex-col items-center gap-1.5 w-full">
+            {rightShown.map((pub, idx) => (
+              <PublisherLogo key={idx} name={pub.name} domain={pub.domain} size="sm" className="w-7 h-7 rounded-full border-2 border-white dark:border-zinc-800 shadow-sm shrink-0" />
+            ))}
+            {rightExtra > 0 && (
+              <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 flex items-center justify-center text-[9px] font-black border-2 border-white dark:border-zinc-800 shadow-sm shrink-0">
+                +{rightExtra}
+              </div>
+            )}
+            {grouped.right.length === 0 && (
+              <span className="text-[9px] text-muted-foreground italic my-4">—</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Untracked Bias Section */}
+      {untrackedShown.length > 0 && (
+        <div className="border-t border-border/50 pt-3">
+          <span className="text-[9px] font-black uppercase tracking-wider text-muted-foreground block mb-2">Untracked Bias</span>
+          <div className="flex flex-wrap gap-1.5">
+            {untrackedShown.map((pub, idx) => (
+              <PublisherLogo key={idx} name={pub.name} domain={pub.domain} size="xs" className="w-5 h-5 rounded-full border border-border/50 shadow-sm shrink-0" />
+            ))}
+            {grouped.untracked.length > 10 && (
+              <div className="w-5 h-5 rounded-full bg-secondary text-muted-foreground flex items-center justify-center text-[8px] font-bold border border-border/50 shadow-sm shrink-0">
+                +{grouped.untracked.length - 10}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

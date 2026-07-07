@@ -7,6 +7,10 @@ interface AuthUser {
   email: string;
   role: "admin" | "editor";
   status: string;
+  isPremium?: boolean;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  subscriptionStatus?: string | null;
 }
 
 interface AuthProfile {

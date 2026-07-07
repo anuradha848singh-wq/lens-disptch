@@ -171,8 +171,6 @@ export const api = {
   },
 
   // The Lens Dispatch features
-  blindspot: () =>
-    request<{ leftBlindspot: ArticleWithDetails[]; rightBlindspot: ArticleWithDetails[] }>("/api/blindspot"),
 
   myBias: () => request<MyBiasStats>("/api/my-bias"),
 

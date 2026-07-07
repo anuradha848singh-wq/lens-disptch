@@ -91,7 +91,7 @@ export interface IStorage {
 
   // Ground News advanced features
   getTrendingArticles(limit: number): Promise<ArticleWithDetails[]>;
-  getHomepageClusters(limit?: number): Promise<any[]>;
+  getHomepageClusters(limit?: number, offset?: number, search?: string, category?: string, market?: string): Promise<any[]>;
   getHomepageSlots(): Promise<Record<string, any[]>>;
   getBlindspotArticles(): Promise<{ leftBlindspot: ArticleWithDetails[]; rightBlindspot: ArticleWithDetails[] }>;
   trackReadingHistory(userId: string, articleId: string): Promise<ReadingHistoryEntry>;
@@ -101,7 +101,7 @@ export interface IStorage {
   updateUserPreferences(userId: string, data: Partial<UserPreference>): Promise<UserPreference>;
   trackShare(articleId: string, userId: string | null, platform: string): Promise<ShareEvent>;
   getArticleShareCount(articleId: string): Promise<number>;
-  getForYouArticles(userId: string, limit: number): Promise<ArticleWithDetails[]>;
+  getForYouArticles(userId: string, limit: number, offset?: number): Promise<ArticleWithDetails[]>;
   updateArticleContent(id: string, bodyHtml: string): Promise<void>;
   
   getSystemSettings(): Promise<SystemSettings>;
@@ -217,7 +217,13 @@ export class MemStorage implements IStorage {
       passwordHash: insertUser.passwordHash,
       role: insertUser.role || "editor",
       status: insertUser.status || "active",
-      preferences: null,
+      preferences: {},
+      interestVector: null,
+      biasProfile: {},
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      subscriptionStatus: null,
+      isPremium: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -281,6 +287,9 @@ export class MemStorage implements IStorage {
       website: insertPublisher.website || null,
       rssUrl: insertPublisher.rssUrl || null,
       biasRating: insertPublisher.biasRating || null,
+      politicalAlignment: insertPublisher.politicalAlignment || null,
+      narrativeStance: insertPublisher.narrativeStance || null,
+      region: insertPublisher.region || null,
       factualityRating: insertPublisher.factualityRating || null,
       ownerName: insertPublisher.ownerName || null,
       promoterGroup: insertPublisher.promoterGroup || null,
@@ -1849,21 +1858,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getHomepageClusters(limit: number = 50, offset: number = 0, search?: string, category?: string, market?: string): Promise<any[]> {
-    const cacheKey = `homepage_clusters_${limit}_${offset}_${search || 'all'}_${category || 'all'}_${market || 'all'}`;
-    return await cache.fetch(cacheKey, async () => {
+    const cacheKey = `homepage_clusters_full_${search || 'all'}_${category || 'all'}_${market || 'all'}`;
+    const allClusters = await cache.fetch(cacheKey, async () => {
       let conditions = [sql`${clusters.sourceCount} >= 0`];
       if (market && market !== "GLOBAL") {
         conditions.push(sql`(${clusters.primaryMarket} = ${market} OR ${clusters.multiMarket} ? ${market})`);
       }
       if (search) {
-        conditions.push(sql`${clusters.headline} ILIKE ${`%${search}%`}`);
+        conditions.push(sql`(${clusters.headline} ILIKE ${`%${search}%`} OR ${clusters.summary} ILIKE ${`%${search}%`} OR ${clusters.categorySlug} ILIKE ${`%${search}%`})`);
       }
       
       const query = db.select()
         .from(clusters)
         .where(and(...conditions))
         .orderBy(desc(clusters.lastUpdatedAt))
-        .limit(200);
+        .limit(1000);
       console.log("[getHomepageClusters] Query:", query.toSQL());
       const topClusters = await query;
 
@@ -1903,7 +1912,8 @@ export class DatabaseStorage implements IStorage {
           
           const breakingScore = c.importanceScore || 0; // Out of 100
 
-          const score = (recencyScore * 10) + (Math.min(srcCount, 20) * 0.5) + (perspectiveSpread * 25) + (breakingScore * 0.5);
+          // Boost sourceCount and breakingScore to ensure high-quality, dense clusters float to top
+          const score = (recencyScore * 10) + (Math.min(srcCount, 50) * 1.5) + (perspectiveSpread * 25) + (breakingScore * 1.0);
 
           scoredClusters.push({
             ...art,
@@ -1929,8 +1939,6 @@ export class DatabaseStorage implements IStorage {
       const categoryCounts = new Map<string, number>();
       
       for (const sc of scoredClusters) {
-        if (finalSelection.length >= limit) break;
-        
         // If searching for a specific category, only include that category
         if (category && category !== "all") {
           const artCatSlug = sc.categories?.[0]?.slug || sc.categories?.[0]?.name?.toLowerCase() || "";
@@ -1940,15 +1948,17 @@ export class DatabaseStorage implements IStorage {
         const catId = sc.categoryId || "unknown";
         const count = categoryCounts.get(catId) || 0;
         
-        if (count < 10) {
+        if (count < 20) {
           finalSelection.push(sc);
           categoryCounts.set(catId, count + 1);
         }
       }
       
-      // If we paginated, return the correct slice
-      return finalSelection.slice(offset, offset + limit);
+      return finalSelection;
     });
+
+    // Slice the cached array for pagination
+    return allClusters.slice(offset, offset + limit);
   }
 
   async getBlindspotArticles(): Promise<{ leftBlindspot: ArticleWithDetails[]; rightBlindspot: ArticleWithDetails[] }> {

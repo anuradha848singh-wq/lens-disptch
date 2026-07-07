@@ -227,19 +227,17 @@ export function calculateShingleSimilarity(a: string, b: string): number {
 }
 
 /**
- * Convert a publisher bias string label to a numeric score (-100 to +100).
- * Negative = left, positive = right, 0 = center.
+ * Convert a publisher bias string label to a numeric score
  */
 export function biasLabelToScore(bias: string): number {
-  const b = (bias || "neutral").toLowerCase();
-  if (b === "far-left" || b === "pro_opposition") return -75;
-  if (b === "pro_opposition") return -50;
-  if (b === "lean-left" || b === "lean_left") return -25;
-  if (b === "neutral") return 0;
-  if (b === "lean-right" || b === "lean_right") return 25;
-  if (b === "pro_establishment") return 50;
-  if (b === "far-right" || b === "pro_establishment") return 75;
-  return 0;
+  const b = (bias || "center").toLowerCase();
+  if (b === "far_left") return -80;
+  if (b === "left") return -50;
+  if (b === "center_left") return -20;
+  if (b === "center_right") return 20;
+  if (b === "right") return 50;
+  if (b === "far_right") return 80;
+  return 0; // center
 }
 
 /**
@@ -302,7 +300,7 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
 
   // --- TITLE ---
   const title = article.title || "";
-  if (title.length < 20) { score -= 30; flags.push("title too short"); }
+  if (title.length < 20) { score -= 10; flags.push("title too short"); }
 
   // Enhanced clickbait detection — 40+ patterns
   const CLICKBAIT = [
@@ -332,7 +330,7 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
     "is this the end", "has it come to this",
   ];
   if (CLICKBAIT.some(p => title.toLowerCase().includes(p))) {
-    score -= 35; flags.push("clickbait title");
+    score -= 10; flags.push("clickbait title");
   }
 
   // Listicle check (e.g. "10 Things You..." "25 Reasons Why...")
@@ -356,9 +354,9 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
     // Skip thin content penalties for paywalled or RSS-stub articles
     if (isMetadataOnly) flags.push("metadata_only — content scoring deferred");
   } else {
-    if (wordCount < 200) {
-      score -= 60;
-      flags.push("critically thin content (<200 words)");
+    if (wordCount < 100) {
+      score -= 30;
+      flags.push("critically thin content (<100 words)");
     } else {
       const wcScore = scoreWordCount(wordCount);
       if (wcScore < 50) { score -= 20; flags.push("low word count/quality"); }
@@ -381,12 +379,12 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
 
   // --- PUBLISHER QUALITY ---
   const pubQuality = publisher.quality || 50;
-  if (pubQuality < 40) { score -= 35; flags.push("very low quality publisher"); }
-  else if (pubQuality < 60) { score -= 15; flags.push("low quality publisher"); }
+  if (pubQuality < 40) { score -= 15; flags.push("very low quality publisher"); }
+  else if (pubQuality < 60) { score -= 5; flags.push("low quality publisher"); }
 
   // --- EXTRA PENALTY FOR EXTREME TIERS ---
   const biasTier = publisher.biasTier || "neutral";
-  if (biasTier === "pro_opposition" || biasTier === "pro_establishment") {
+  if ((biasTier === "pro_opposition" || biasTier === "pro_establishment") && !isMetadataOnly) {
     if (!article.author) {
       score -= 20; flags.push("no byline — required for extreme bias tier");
     }
@@ -401,7 +399,8 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
   if (hoursOld > 72) score -= 10;
   if (hoursOld > 168) score -= 25;
 
-  const minQuality = (QUALITY_GATES as any)[biasTier] || 60;
+  // Use a minimum of 35 or the tier's gate (whichever is lower) to allow more articles in
+  const minQuality = Math.min((QUALITY_GATES as any)[biasTier] || 60, 35);
 
   return {
     score: Math.round(Math.max(0, score)),
@@ -410,7 +409,7 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
     tier: (
       score >= 85 ? "premium" :
         score >= 65 ? "standard" :
-          score >= 50 ? "low" : "rejected"
+          score >= 35 ? "low" : "rejected"
     )
   };
 }
@@ -419,7 +418,7 @@ export function scoreArticle(article: any, publisher: { quality: number, biasTie
 export function calculateQualityScore(art: any, pubInfo: any): number {
   const result = scoreArticle(art, {
     quality: pubInfo.factualityScore || 50,
-    biasTier: pubInfo.biasRating || "neutral"
+    biasTier: pubInfo.narrativeStance || "neutral"
   });
   return result.score;
 }
@@ -441,13 +440,13 @@ export function slugify(text: string): string {
 
 export function guessCategory(title: string, description?: string): string {
   const text = `${title} ${description || ""}`.toLowerCase();
-  if (/politic|election|congress|senate|white house|parliament|government|democrat|republican|vote|legislat|sanctions|treaty|modi|bjp|lok sabha|rajya sabha/.test(text)) return "politics";
-  if (/tech| ai |artificial|software|algorithm|semiconductor|cloud|compute|startup|cyber|robot|app|iphone|android|social media/.test(text)) return "technology";
-  if (/business|economy|stock|market|nasdaq|dow jones|gdp|inflation|trade|finance|bank|crypto|bitcoin|investing|earnings|ceo|sensex|nifty|rupee/.test(text)) return "business";
-  if (/health|medical|doctor|hospital|science|research|vaccine|drug|disease|mental|covid|cancer|surgery|biology/.test(text)) return "health";
-  if (/sport|game|team|player|league|championship|cup|tournament|stadium|medal|football|basketball|soccer|tennis|cricket|ipl/.test(text)) return "sports";
-  if (/world|global|international|nation|foreign|conflict|war|peace|summit|un |nato|eu |europe|africa|asia|middle east/.test(text)) return "world";
-  if (/movie|film|actor|music|song|album|concert|celebrity|hollywood|bollywood|netflix|streaming|theater|entertainment/.test(text)) return "entertainment";
+  if (/\b(business|economy|stock|market|nasdaq|dow jones|gdp|inflation|trade|finance|bank|crypto|bitcoin|investing|earnings|ceo|sensex|nifty|rupee)\b/.test(text)) return "business";
+  if (/\b(tech|ai|artificial|software|algorithm|semiconductor|cloud|compute|startup|cyber|robot|app|iphone|android|social media)\b/.test(text)) return "technology";
+  if (/\b(health|medical|doctor|hospital|science|research|vaccine|drug|disease|mental|covid|cancer|surgery|biology)\b/.test(text)) return "health";
+  if (/\b(sport|game|team|player|league|championship|cup|tournament|stadium|medal|football|basketball|soccer|tennis|cricket|ipl)\b/.test(text)) return "sports";
+  if (/\b(movie|film|actor|music|song|album|concert|celebrity|hollywood|bollywood|netflix|streaming|theater|entertainment)\b/.test(text)) return "entertainment";
+  if (/\b(world|global|international|nation|foreign|conflict|war|peace|summit|un|nato|eu|europe|africa|asia|middle east)\b/.test(text)) return "world";
+  if (/\b(politic|election|congress|senate|white house|parliament|government|democrat|republican|vote|legislat|sanctions|treaty|modi|bjp|lok sabha|rajya sabha)\b/.test(text)) return "politics";
   return "politics";
 }
 
@@ -481,7 +480,7 @@ export function fillCluster(candidates: any[]): {
     const pubInfo = article.publisher || {};
     const quality = scoreArticle(article, {
       quality: pubInfo.factualityScore || 50,
-      biasTier: pubInfo.biasRating || "neutral"
+      biasTier: pubInfo.narrativeStance || "neutral"
     });
 
     if (!quality.approved) {
@@ -489,7 +488,7 @@ export function fillCluster(candidates: any[]): {
       continue;
     }
 
-    const tier = pubInfo.biasRating || "neutral";
+    const tier = pubInfo.narrativeStance || "neutral";
     if (buckets[tier]) buckets[tier].push(article);
     else buckets["neutral"].push(article);
   }
@@ -751,7 +750,7 @@ export function calculateSimilarityScore(artNew: ArticleToProcess, artExisting: 
     }
   }
 
-  const SIMILARITY_THRESHOLD = 0.25; // Lowered from 0.35 for more aggressive clustering
+  const SIMILARITY_THRESHOLD = 0.15; // Lowered from 0.25 for even more aggressive clustering
   const CLUSTERING_TIME_WINDOW_HOURS = 120; // Increased from 72h to 120h (5 days)
   const w_t = 0.35;
   const w_ent = 0.35;
@@ -998,9 +997,9 @@ function computeStoryMatchScore(
   if (maxShingleSim > 0.85) return 0.95;
 
   // Weighted composite — RECALIBRATED for aggressive clustering
-  // Entity (0.35) + Keyword (0.40) + Fingerprint (0.25) + Shingle (0.15) + Bonus
-  // Shifted weight towards keywords/fingerprints so articles without perfect entity extraction still cluster
-  const composite = (entityMatchScore * 0.35) + (kwScore * 0.40) + (fpScore * 0.25) + (maxShingleSim * 0.15) + containmentBonus;
+  // Entity (0.45) + Keyword (0.30) + Fingerprint (0.15) + Shingle (0.10) + Bonus
+  // Shifted weight towards entities to better group stories from different biases
+  const composite = (entityMatchScore * 0.45) + (kwScore * 0.30) + (fpScore * 0.15) + (maxShingleSim * 0.10) + containmentBonus;
 
   return Math.min(1, composite);
 }
@@ -1008,7 +1007,7 @@ function computeStoryMatchScore(
 export async function findClusterViaPgVector(art: ArticleToProcess & { embedding?: number[] | null }): Promise<string | null> {
   if (!art.embedding || !process.env.DATABASE_URL) return null;
   const v1 = typeof art.embedding === 'string' ? JSON.parse(art.embedding as any) : art.embedding;
-  const results = await storage.findNearestClusters(v1, { limit: 3, minScore: 0.78, maxAgeHours: 48 });
+  const results = await storage.findNearestClusters(v1, { limit: 3, minScore: 0.65, maxAgeHours: 48 });
   
   if (results.length > 0) {
     return results[0].clusterId;
@@ -1027,7 +1026,7 @@ export async function findCluster(art: ArticleToProcess & { embedding?: number[]
   }
 
   const v1 = typeof art.embedding === 'string' ? JSON.parse(art.embedding as any) : art.embedding;
-  const CLUSTERING_THRESHOLD = 0.78;
+  const CLUSTERING_THRESHOLD = 0.65; // Lowered from 0.78 to group more articles per story
   const MAX_CLUSTER_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
 
   let bestId: string | null = null;
@@ -1073,7 +1072,7 @@ export async function retroactivelyMergeToCluster(
   
   if (process.env.DATABASE_URL && embeddingBy) {
     const v1 = typeof embeddingBy === 'string' ? JSON.parse(embeddingBy as any) : embeddingBy;
-    candidates = await storage.findSimilarArticles(v1, { limit: 50, threshold: 0.82 });
+    candidates = await storage.findSimilarArticles(v1, { limit: 50, threshold: 0.65 });
   } else {
     candidates = await db.select({
       id: articles.id,
@@ -1184,7 +1183,7 @@ async function scheduleContentEnrichment(articleId: string, url: string, cluster
     const scraped = await timed("Extraction", async () => {
       return await fetchFullContent(url);
     });
-    if (scraped) {
+    if (scraped && ((scraped.wordCount || 0) >= 100 || scraped.isPaywalled)) {
       traceUpdate.status = "enriched";
       traceUpdate.word_count = scraped.wordCount;
       if (scraped.isPaywalled) traceUpdate.isPaywalled = true;
@@ -1263,10 +1262,12 @@ export function lookupPublisherInfo(name: string, url: string): PublisherInfo & 
   // Fallback if not in DB
   // Default to Tier 1 metadata
   return {
-    bias: "neutral", // Default bias
-    factuality: "very_high",
+    politicalAlignment: "center" as any,
+    narrativeStance: "neutral" as any,
+    region: "global" as any,
+    factuality: "mixed" as any,
     ownerName: name || domain,
-    ownerType: "unknown",
+    ownerType: "unknown" as any,
     domain: domain
   };
 }
@@ -1333,7 +1334,10 @@ export async function processArticle(
       description: `News source: ${realSourceName}`,
       logoUrl: null,
       website: realSourceUrl || null,
-      biasRating: pubInfo.bias,
+      biasRating: pubInfo.narrativeStance,
+      politicalAlignment: pubInfo.politicalAlignment,
+      narrativeStance: pubInfo.narrativeStance,
+      region: pubInfo.region,
       factualityRating: pubInfo.factuality,
       ownerName: pubInfo.ownerName,
       ownerType: pubInfo.ownerType,
@@ -1408,6 +1412,7 @@ export async function processArticle(
       sourceCount: 1,
       originPublisherId: publisher.id,
       originPublishedAt: art.publishedAt ? new Date(art.publishedAt) : new Date(),
+      primaryMarket: pubInfo.country || "US"
     });
     finalClusterId = newCluster.id;
     trace.clustered_new = new Date().toISOString();
@@ -1433,11 +1438,22 @@ export async function processArticle(
     if (articleEmbedding) {
       await storage.upsertClusterCentroid(finalClusterId, articleEmbedding, 1);
     }
+    
+    const existingCluster = await storage.getCluster(finalClusterId);
+    if (existingCluster) {
+      const currentMultiMarket = Array.isArray(existingCluster.multiMarket) ? existingCluster.multiMarket : [];
+      const articleCountry = pubInfo.country || "US";
+      if (existingCluster.primaryMarket !== articleCountry && !currentMultiMarket.includes(articleCountry)) {
+        await storage.updateCluster(finalClusterId, {
+          multiMarket: [...currentMultiMarket, articleCountry]
+        });
+      }
+    }
   }
 
   const quality = scoreArticle({ title: art.title, description: art.description, excerpt: excerpt, publishedAt: art.publishedAt }, {
     quality: publisher.reliabilityScore || 60,
-    biasTier: pubInfo.bias
+    biasTier: pubInfo.narrativeStance
   });
   const qualityScore = quality.score;
   const visibility = determineVisibility(qualityScore, 0);
@@ -1449,7 +1465,7 @@ export async function processArticle(
   trace.quality_approved = quality.approved;
 
   // Derive numeric biasScore from publisher's bias label so every article has real data
-  const biasScore = biasLabelToScore(pubInfo.bias);
+  const biasScore = biasLabelToScore(pubInfo.politicalAlignment);
 
   // Extract Named Entities (People, Places, Organizations)
   let extractedEntities: string[] = [];
@@ -1495,7 +1511,7 @@ export async function processArticle(
         biasScore: biasScore,
         entities: extractedEntities,
         publishedAt: art.publishedAt ? new Date(art.publishedAt) : new Date(),
-      }, [], []);  // categoryIds and tagIds resolved by the fetcher after creation
+      }, categoryId ? [categoryId] : [], []);  // categoryIds resolved immediately, tagIds empty for now
     });
   } catch (err: any) {
     if (err.code === '23505') return null; // duplicate article — skip silently

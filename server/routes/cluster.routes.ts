@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { authenticateUser, optionalAuth } from "../auth";
+import { authenticateUser, optionalAuth, requirePremium } from "../auth";
 import { cache } from "../cache";
 import { db } from "../db";
 import { articles, clusters, publishers } from "../../shared/schema";
@@ -211,7 +211,7 @@ clusterRouter.get("/:id/impact", async (req, res) => {
 
 // ── Premium Feature Endpoints (FLAN-T5 Powered) ───────────────────────────
 
-clusterRouter.get("/:id/foreign-gaze", async (req, res) => {
+clusterRouter.get("/:id/foreign-gaze", optionalAuth, requirePremium, async (req, res) => {
   try {
     const cluster = await storage.getCluster(req.params.id);
     if (!cluster) return res.status(404).json({ error: "Cluster not found" });
@@ -224,7 +224,7 @@ clusterRouter.get("/:id/foreign-gaze", async (req, res) => {
   }
 });
 
-clusterRouter.get("/:id/briefing", async (req, res) => {
+clusterRouter.get("/:id/briefing", optionalAuth, requirePremium, async (req, res) => {
   try {
     const cluster = await storage.getCluster(req.params.id);
     if (!cluster) return res.status(404).json({ error: "Cluster not found" });
@@ -237,7 +237,7 @@ clusterRouter.get("/:id/briefing", async (req, res) => {
   }
 });
 
-clusterRouter.get("/:id/entities", async (req, res) => {
+clusterRouter.get("/:id/entities", optionalAuth, requirePremium, async (req, res) => {
   try {
     const cluster = await storage.getCluster(req.params.id);
     if (!cluster) return res.status(404).json({ error: "Cluster not found" });
@@ -249,7 +249,7 @@ clusterRouter.get("/:id/entities", async (req, res) => {
   }
 });
 
-clusterRouter.get("/:id/market-impact", async (req, res) => {
+clusterRouter.get("/:id/market-impact", optionalAuth, requirePremium, async (req, res) => {
   try {
     const cluster = await storage.getCluster(req.params.id);
     if (!cluster) return res.status(404).json({ error: "Cluster not found" });

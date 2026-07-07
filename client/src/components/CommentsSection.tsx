@@ -118,33 +118,33 @@ export function CommentsSection({ clusterId }: CommentsSectionProps) {
   const topLevelComments = comments.filter(c => !c.parentId);
 
   return (
-    <section className="border-t border-border pt-6 mt-6">
-      <div className="flex items-center gap-2 mb-6">
-        <MessageSquare className="w-5 h-5 text-muted-foreground" />
-        <h3 className="text-lg font-bold text-foreground">
-          Discussion ({comments.length})
+    <section className="border-t-[1.5px] border-dashed border-hairline-dashed pt-8 mt-12 mb-12">
+      <div className="flex items-center gap-3 mb-8 pb-4 border-b-[1.5px] border-hairline text-eyebrow text-ink tracking-[0.2em]">
+        <MessageSquare className="w-5 h-5 text-ink-muted" />
+        <h3 className="uppercase">
+          PUBLIC SENSOR · DOSSIER LOGS ({comments.length})
         </h3>
       </div>
 
       {/* Comment Form */}
-      <form onSubmit={handleSubmit} className="mb-8">
+      <form onSubmit={handleSubmit} className="mb-12">
         <Textarea
           value={newComment}
           onChange={(e) => setNewComment(e.target.value)}
-          placeholder={isAuthenticated ? "Share your perspective..." : "Log in to join the discussion..."}
+          placeholder={isAuthenticated ? "TRANSMIT INTELLIGENCE..." : "LOG IN TO TRANSMIT..."}
           disabled={isSubmitting}
-          className="mb-3 min-h-[100px]"
+          className="mb-4 min-h-[120px] bg-card-surface border-[1.5px] border-dashed border-hairline-dashed rounded-none font-serif text-[16px] resize-none focus-visible:ring-1 focus-visible:ring-lens-cyan text-ink"
         />
         <div className="flex justify-between items-center">
-          <span className="text-xs text-muted-foreground">
-            {isAuthenticated ? "Posting as your username" : "Posting anonymously"}
+          <span className="text-mono-metadata text-ink-muted uppercase tracking-[0.2em]">
+            {isAuthenticated ? "SECURE TRANSMISSION" : "ANONYMOUS TRANSMISSION"}
           </span>
           <Button 
             type="submit" 
             disabled={!newComment.trim() || isSubmitting}
-            className="bg-accent-interactive hover:bg-accent-interactive/90"
+            className="rounded-none bg-signal-yellow hover:bg-signal-yellow/90 text-black font-mono font-bold text-[11px] tracking-widest uppercase px-8 h-10"
           >
-            {isSubmitting ? "Posting..." : "Post Comment"}
+            {isSubmitting ? "TRANSMITTING..." : "TRANSMIT LOG"}
           </Button>
         </div>
       </form>
@@ -152,60 +152,63 @@ export function CommentsSection({ clusterId }: CommentsSectionProps) {
       {/* Comments List */}
       {isLoading ? (
         <div className="space-y-4">
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full rounded-none" />
+          <Skeleton className="h-24 w-full rounded-none" />
         </div>
       ) : topLevelComments.length === 0 ? (
-        <div className="text-center py-8 text-muted-foreground">
-          <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p>No comments yet. Be the first to share your perspective!</p>
+        <div className="text-center py-12 border-[1.5px] border-dashed border-hairline-dashed bg-card-surface">
+          <MessageSquare className="w-8 h-8 mx-auto mb-4 text-ink-muted opacity-50" />
+          <p className="text-mono-metadata text-ink-muted uppercase tracking-[0.2em]">NO LOGS RECORDED. BE THE FIRST TO TRANSMIT.</p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {topLevelComments.map((comment) => (
-            <div key={comment.id} className="border-b border-border pb-4 last:border-0">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-sm font-bold text-foreground">
-                  {comment.displayHandle || "Anonymous"}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {comment.createdAt ? formatDistanceToNow(new Date(comment.createdAt), { addSuffix: true }) : ""}
-                </span>
-              </div>
-              
-              <p className="text-sm text-foreground mb-3 leading-relaxed">
-                {comment.content}
-              </p>
-              
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => handleVote(comment.id, 1)}
-                  className={`flex items-center gap-1 text-xs font-bold transition-colors ${
-                    comment.userVote === 1 ? "text-green-600" : "text-muted-foreground hover:text-green-600"
-                  }`}
-                  disabled={!isAuthenticated}
-                >
-                  <ThumbsUp className="w-3.5 h-3.5" />
-                  <span>{comment.upvotes || 0}</span>
-                </button>
-                
-                <button
-                  onClick={() => handleVote(comment.id, -1)}
-                  className={`flex items-center gap-1 text-xs font-bold transition-colors ${
-                    comment.userVote === -1 ? "text-red-600" : "text-muted-foreground hover:text-red-600"
-                  }`}
-                  disabled={!isAuthenticated}
-                >
-                  <ThumbsDown className="w-3.5 h-3.5" />
-                  <span>{comment.downvotes || 0}</span>
-                </button>
-                
-                {!isAuthenticated && (
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" />
-                    Log in to vote
+            <div key={comment.id} className="border-b-[1.5px] border-dashed border-hairline-dashed pb-6 last:border-0 relative">
+              <div className="absolute -left-[2px] top-2 w-[1.5px] h-full bg-lens-cyan opacity-20" />
+              <div className="pl-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-mono text-[11px] font-bold text-ink uppercase tracking-widest bg-paper border-[1.5px] border-hairline px-2 py-0.5">
+                    {comment.displayHandle || "ANONYMOUS"}
                   </span>
-                )}
+                  <span className="text-mono-metadata text-ink-muted uppercase">
+                    {comment.createdAt ? formatDistanceToNow(new Date(comment.createdAt), { addSuffix: true }) : ""}
+                  </span>
+                </div>
+                
+                <p className="font-serif text-[18px] text-ink mb-4 leading-[1.6]">
+                  {comment.content}
+                </p>
+                
+                <div className="flex items-center gap-6">
+                  <button
+                    onClick={() => handleVote(comment.id, 1)}
+                    className={`flex items-center gap-1.5 text-mono-metadata transition-colors ${
+                      comment.userVote === 1 ? "text-lens-cyan" : "text-ink-muted hover:text-lens-cyan"
+                    }`}
+                    disabled={!isAuthenticated}
+                  >
+                    <ThumbsUp className="w-3.5 h-3.5" />
+                    <span>{comment.upvotes || 0}</span>
+                  </button>
+                  
+                  <button
+                    onClick={() => handleVote(comment.id, -1)}
+                    className={`flex items-center gap-1.5 text-mono-metadata transition-colors ${
+                      comment.userVote === -1 ? "text-wire-red" : "text-ink-muted hover:text-wire-red"
+                    }`}
+                    disabled={!isAuthenticated}
+                  >
+                    <ThumbsDown className="w-3.5 h-3.5" />
+                    <span>{comment.downvotes || 0}</span>
+                  </button>
+                  
+                  {!isAuthenticated && (
+                    <span className="text-mono-metadata text-ink-muted/50 flex items-center gap-1.5 ml-auto">
+                      <AlertCircle className="w-3 h-3" />
+                      SECURE LOGIN REQUIRED TO VERIFY
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           ))}

@@ -43,7 +43,7 @@ export async function updateUserVector(userId: string) {
 
   if (recentInteractions.length === 0) return;
 
-  const clusterIds = [...new Set(recentInteractions.map(i => i.clusterId))];
+  const clusterIds = [...new Set(recentInteractions.map((i: any) => i.clusterId))].filter(Boolean) as string[];
   
   // Get centroids for these clusters
   const centroids = await db.select({
@@ -54,7 +54,7 @@ export async function updateUserVector(userId: string) {
     .where(inArray(clusterCentroids.clusterId, clusterIds));
 
   const centroidMap = new Map<string, number[]>();
-  centroids.forEach(c => {
+  centroids.forEach((c: any) => {
     let vec = c.centroid;
     if (typeof vec === 'string') {
       try { vec = JSON.parse(vec); } catch(e) {}
@@ -138,7 +138,7 @@ export async function updateUserVector(userId: string) {
       "AGGREGATORS": 0
     };
 
-    clusterArticles.forEach(a => {
+    clusterArticles.forEach((a: any) => {
       if (a.biasLabel && biasCounts[a.biasLabel] !== undefined) {
         biasCounts[a.biasLabel]++;
       }
@@ -239,7 +239,7 @@ export async function generateAlgorithmicFeed(userId: string, limit: number = 20
       LIMIT 2
     `);
 
-    const blindspotIds = blindspotQuery.rows.map(r => r.id);
+    const blindspotIds = blindspotQuery.rows.map((r: any) => r.id);
     // Inject at positions 3 and 7 (or random)
     if (blindspotIds.length > 0) {
       if (blindspotIds[0]) selectedClusterIds.splice(2, 0, blindspotIds[0] as string);
